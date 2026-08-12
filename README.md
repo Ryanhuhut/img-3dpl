@@ -212,12 +212,91 @@ image. The build takes about 30 minutes on 4 threads.
 
 ---
 
-## Credits
+## The COLMAP binary
 
-- [COLMAP](https://github.com/colmap/colmap) — structure from motion
-- [Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting) — Inria / MPII
-- [Ceres Solver](https://github.com/ceres-solver/ceres-solver) — non-linear optimisation
-- [SuperSplat](https://superspl.at/editor) — browser viewer
+Stage 1 and stage 2 both use the same prebuilt COLMAP, so the database written on
+Colab is read by the exact same version on your machine. Mixing versions is how
+you end up staring at `SQL logic error`.
+
+Always the newest build:
+
+```
+https://github.com/Ryanhuhut/colmap-cuda-colab/releases/latest/download/colmap-3.13.0-cuda12.2-ubuntu2204-sm75.tar.gz
+```
+
+Pinned to this exact version, for reproducible results later:
+
+```
+https://github.com/Ryanhuhut/colmap-cuda-colab/releases/download/v3.13.0-cuda12.2-sm75/colmap-3.13.0-cuda12.2-ubuntu2204-sm75.tar.gz
+```
+
+46 MB (47,654,853 bytes).
+
+```
+SHA256: 6c72e8535a780198ce5e56af01d9aac4447de32051cffa9a773733ebcd9ac317
+```
+
+Repository, build scripts and release notes:
+**[Ryanhuhut/colmap-cuda-colab](https://github.com/Ryanhuhut/colmap-cuda-colab)**
+
+---
+
+## Everything this is built on
+
+None of the hard parts here are mine. This repository is plumbing: it connects
+existing tools, compiles one of them properly, and splits the work sensibly.
+
+### The two that do the actual work
+
+| Project | Role | License |
+|---|---|---|
+| [COLMAP](https://github.com/colmap/colmap) | Structure from motion — finds where each photo was taken from | BSD |
+| [Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting) | The renderer, from Inria and MPII | Non-commercial research |
+
+### Bundled inside the COLMAP package
+
+| Library | Version | Role | License |
+|---|---|---|---|
+| [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit) | 12.2.140 | GPU compute | NVIDIA EULA |
+| [Ceres Solver](https://github.com/ceres-solver/ceres-solver) | 2.2.0 | Non-linear optimisation | BSD |
+| [Eigen](https://eigen.tuxfamily.org) | 3.4.0 | Linear algebra | MPL2 |
+| [Boost](https://www.boost.org) | 1.74.0 | Command line parsing, graphs | Boost |
+| [PoseLib](https://github.com/PoseLib/PoseLib) | `f119951` | Camera pose solvers | BSD |
+| [faiss](https://github.com/facebookresearch/faiss) | `36b7735` | Nearest-neighbour search | MIT |
+| [SuiteSparse](https://people.engr.tamu.edu/davis/suitesparse.html) | 5.10.1 | Sparse matrix solvers | LGPL/GPL |
+| [OpenBLAS](https://www.openblas.net) | 0.3.20 | Basic linear algebra | BSD |
+| [LAPACK](https://www.netlib.org/lapack/) | 3.10.0 | Higher-level linear algebra | BSD |
+| [METIS](https://github.com/KarypisLab/METIS) | 5.1.0 | Graph partitioning | Apache 2.0 |
+| [CGAL](https://www.cgal.org) | 5.4 | Computational geometry | GPL/LGPL |
+| [FreeImage](https://freeimage.sourceforge.io) | 3.18.0 | Image reading and writing | FIPL/GPL |
+| [glog](https://github.com/google/glog) | 0.4.0 | Logging | BSD |
+| [gflags](https://github.com/gflags/gflags) | 2.2.2 | Flag handling | BSD |
+| [SQLite](https://www.sqlite.org) | 3.37.2 | The feature and match database | Public domain |
+
+Plus the image codecs FreeImage pulls in — libjpeg, libpng, libtiff, libwebp,
+libraw, OpenEXR, JPEG-XR — along with zlib, OpenSSL, libcurl and libgomp.
+Seventy-nine shared libraries in total; the full list is in `BUILD_INFO.txt`
+inside the tarball.
+
+### The desktop app
+
+| Project | Role | License |
+|---|---|---|
+| [GTK4](https://www.gtk.org) | Interface toolkit | LGPL |
+| [libadwaita](https://gitlab.gnome.org/GNOME/libadwaita) | GNOME styling | LGPL |
+| [PyGObject](https://pygobject.gnome.org) | Python bindings for both | LGPL |
+| [Docker](https://www.docker.com) | Runs COLMAP without installing it | Apache 2.0 |
+
+### Viewing the result
+
+| Project | Role |
+|---|---|
+| [SuperSplat](https://superspl.at/editor) | Browser-based viewer and editor for `.ply` splats |
+
+### Where it runs
+
+[Google Colab](https://colab.research.google.com) free tier — a Tesla T4 with
+15 GB of VRAM, and two CPU cores.
 
 ---
 

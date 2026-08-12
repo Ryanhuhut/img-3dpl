@@ -210,12 +210,91 @@ khoảng 30 phút với 4 luồng.
 
 ---
 
-## Nguồn gốc
+## Gói COLMAP
 
-- [COLMAP](https://github.com/colmap/colmap) — dựng cấu trúc từ chuyển động
-- [Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting) — Inria / MPII
-- [Ceres Solver](https://github.com/ceres-solver/ceres-solver) — tối ưu phi tuyến
-- [SuperSplat](https://superspl.at/editor) — trình xem chạy trên trình duyệt
+Chặng 1 và chặng 2 dùng chung **đúng một bản COLMAP**, nhờ vậy database ghi trên
+Colab được đọc bởi đúng phiên bản ấy trên máy bạn. Trộn hai phiên bản khác nhau
+là cách nhanh nhất để nhận lỗi `SQL logic error` mà không hiểu vì sao.
+
+Bản mới nhất, luôn tự trỏ đúng bản cuối:
+
+```
+https://github.com/Ryanhuhut/colmap-cuda-colab/releases/latest/download/colmap-3.13.0-cuda12.2-ubuntu2204-sm75.tar.gz
+```
+
+Bản ghim theo phiên bản, dùng khi cần lấy lại đúng bản này về sau:
+
+```
+https://github.com/Ryanhuhut/colmap-cuda-colab/releases/download/v3.13.0-cuda12.2-sm75/colmap-3.13.0-cuda12.2-ubuntu2204-sm75.tar.gz
+```
+
+Nặng 46MB (47.654.853 byte).
+
+```
+SHA256: 6c72e8535a780198ce5e56af01d9aac4447de32051cffa9a773733ebcd9ac317
+```
+
+Kho chứa, kịch bản build và ghi chú phát hành:
+**[Ryanhuhut/colmap-cuda-colab](https://github.com/Ryanhuhut/colmap-cuda-colab)**
+
+---
+
+## Mọi thứ được dùng ở đây
+
+Không phần khó nào trong này là của tôi. Kho này chỉ là đường ống: nó nối các
+công cụ có sẵn lại, biên dịch một trong số đó cho đúng cách, và chia việc ra hợp lý.
+
+### Hai thứ làm việc thật sự
+
+| Dự án | Vai trò | Giấy phép |
+|---|---|---|
+| [COLMAP](https://github.com/colmap/colmap) | Dựng cấu trúc từ chuyển động — tìm ra mỗi ảnh chụp từ đâu | BSD |
+| [Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting) | Bộ dựng hình, của Inria và MPII | Nghiên cứu phi thương mại |
+
+### Nằm sẵn trong gói COLMAP
+
+| Thư viện | Phiên bản | Vai trò | Giấy phép |
+|---|---|---|---|
+| [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit) | 12.2.140 | Tính toán trên GPU | NVIDIA EULA |
+| [Ceres Solver](https://github.com/ceres-solver/ceres-solver) | 2.2.0 | Tối ưu phi tuyến | BSD |
+| [Eigen](https://eigen.tuxfamily.org) | 3.4.0 | Đại số tuyến tính | MPL2 |
+| [Boost](https://www.boost.org) | 1.74.0 | Đọc tham số dòng lệnh, đồ thị | Boost |
+| [PoseLib](https://github.com/PoseLib/PoseLib) | `f119951` | Giải bài toán vị trí camera | BSD |
+| [faiss](https://github.com/facebookresearch/faiss) | `36b7735` | Tìm hàng xóm gần nhất | MIT |
+| [SuiteSparse](https://people.engr.tamu.edu/davis/suitesparse.html) | 5.10.1 | Giải hệ ma trận thưa | LGPL/GPL |
+| [OpenBLAS](https://www.openblas.net) | 0.3.20 | Đại số tuyến tính cơ bản | BSD |
+| [LAPACK](https://www.netlib.org/lapack/) | 3.10.0 | Đại số tuyến tính bậc cao | BSD |
+| [METIS](https://github.com/KarypisLab/METIS) | 5.1.0 | Chia nhỏ đồ thị | Apache 2.0 |
+| [CGAL](https://www.cgal.org) | 5.4 | Hình học tính toán | GPL/LGPL |
+| [FreeImage](https://freeimage.sourceforge.io) | 3.18.0 | Đọc ghi ảnh | FIPL/GPL |
+| [glog](https://github.com/google/glog) | 0.4.0 | Ghi nhật ký | BSD |
+| [gflags](https://github.com/gflags/gflags) | 2.2.2 | Xử lý cờ dòng lệnh | BSD |
+| [SQLite](https://www.sqlite.org) | 3.37.2 | Database đặc trưng và cặp ảnh | Phạm vi công cộng |
+
+Kèm theo là các thư viện ảnh mà FreeImage kéo theo — libjpeg, libpng, libtiff,
+libwebp, libraw, OpenEXR, JPEG-XR — cùng zlib, OpenSSL, libcurl và libgomp.
+Tổng cộng **79 thư viện dùng chung**; danh sách đầy đủ nằm trong `BUILD_INFO.txt`
+bên trong gói.
+
+### App máy tính
+
+| Dự án | Vai trò | Giấy phép |
+|---|---|---|
+| [GTK4](https://www.gtk.org) | Bộ công cụ giao diện | LGPL |
+| [libadwaita](https://gitlab.gnome.org/GNOME/libadwaita) | Kiểu dáng chuẩn GNOME | LGPL |
+| [PyGObject](https://pygobject.gnome.org) | Cầu nối Python cho cả hai thứ trên | LGPL |
+| [Docker](https://www.docker.com) | Chạy COLMAP mà không cài nó lên máy | Apache 2.0 |
+
+### Xem kết quả
+
+| Dự án | Vai trò |
+|---|---|
+| [SuperSplat](https://superspl.at/editor) | Trình xem và chỉnh sửa file `.ply` ngay trên trình duyệt |
+
+### Chạy ở đâu
+
+[Google Colab](https://colab.research.google.com) bậc miễn phí — một card Tesla
+T4 với 15GB VRAM, và hai nhân CPU.
 
 ---
 
