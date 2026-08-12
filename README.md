@@ -1,14 +1,40 @@
-# img-3dpl — Photos to 3D, on a free Colab GPU
+# img-3dpl
 
-A complete pipeline that turns a folder of ordinary photos into a Gaussian
-Splatting model, without owning a GPU.
+***img**age **-**to **3d** **p**ipe**l**ine*
+
+Turn a folder of ordinary photos into a Gaussian Splatting model, on a computer
+with no working graphics card.
+
+[Vietnamese version of this document → README.vi.md](README.vi.md)
+
+---
+
+## No GPU required. Genuinely.
+
+This entire pipeline was built and tested on a budget laptop whose dedicated
+graphics card is **physically dead** — an Intel i3-1005G1, two cores, integrated
+graphics. It still turned 320 photos into a 3D model.
+
+Three things make that work:
+
+- **Compiling CUDA code does not need a CUDA device.** It needs `nvcc`, which
+  ships inside a Docker image. Your machine never executes a single GPU
+  instruction to build the software.
+- **The GPU-hungry stage runs on Colab's free T4.** Installation there takes
+  seven seconds — no `apt install`, no `ldconfig`, no compiling.
+- **The stage that stays on your machine does not want a GPU anyway.** Building
+  camera positions is sequential work. CPU cores beat graphics cards at it, and
+  free-tier Colab hands you only two of them.
+
+If your laptop can run Docker and open a browser, it can do this. It will be
+slower than a workstation. It will still finish.
+
+---
 
 The awkward part of photogrammetry on Colab is that the `colmap` package from
 `apt` is **compiled without CUDA**. Exhaustive matching of 320 photos on CPU runs
 for over three hours and does not finish. This repository fixes that, and splits
 the work so each stage runs where it is fastest.
-
-[Vietnamese version of this document → README.vi.md](README.vi.md)
 
 ---
 

@@ -1,14 +1,39 @@
-# img-3dpl — Từ ảnh chụp thành mô hình 3D, bằng GPU miễn phí của Colab
+# img-3dpl
 
-Một quy trình đầy đủ biến thư mục ảnh thường thành mô hình Gaussian Splatting,
-không cần sở hữu card đồ hoạ nào.
+***img**age **-** to **3d** **p**ipe**l**ine — quy trình biến ảnh thành 3D*
+
+Biến một thư mục ảnh chụp thường thành mô hình Gaussian Splatting, trên máy tính
+không có card đồ hoạ nào chạy được.
+
+[English version → README.md](README.md)
+
+---
+
+## Thật sự không cần GPU
+
+Toàn bộ quy trình này được dựng và thử nghiệm trên một chiếc laptop phổ thông có
+card đồ hoạ rời **đã chết hẳn phần cứng** — Intel i3-1005G1, hai nhân, chỉ còn
+đồ hoạ tích hợp. Nó vẫn biến 320 tấm ảnh thành mô hình 3D.
+
+Ba điều làm nên chuyện đó:
+
+- **Biên dịch mã CUDA không cần thiết bị CUDA.** Nó chỉ cần `nvcc`, thứ nằm sẵn
+  trong một image Docker. Máy bạn không hề chạy một lệnh GPU nào để dựng ra phần
+  mềm này.
+- **Chặng ngốn GPU chạy trên T4 miễn phí của Colab.** Cài đặt ở đó mất bảy giây —
+  không `apt install`, không `ldconfig`, không biên dịch gì.
+- **Chặng ở lại máy bạn vốn không cần GPU.** Dựng vị trí camera là việc tuần tự.
+  Nhân CPU thắng card đồ hoạ ở khoản này, mà Colab miễn phí chỉ cho hai nhân.
+
+Laptop của bạn chạy được Docker và mở được trình duyệt là làm được. Chậm hơn máy
+trạm, đúng. Nhưng vẫn xong.
+
+---
 
 Chỗ vướng khi làm việc này trên Colab: gói `colmap` cài bằng `apt` được **biên
 dịch không kèm CUDA**. Ghép ảnh kiểu `exhaustive` cho 320 tấm chạy bằng CPU mất
 hơn ba tiếng mà vẫn chưa xong. Kho này chữa đúng chỗ đó, đồng thời chia việc ra
 sao cho mỗi chặng chạy ở nơi nó nhanh nhất.
-
-[English version → README.md](README.md)
 
 ---
 
