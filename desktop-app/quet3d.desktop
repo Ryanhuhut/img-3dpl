@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Quét 3D
+GenericName=Dựng vị trí camera
+Comment=Dựng vị trí camera từ database đã ghép sẵn trên Colab, bằng COLMAP
+Exec=/home/ryanhuhut/quet3d-tool/quet3d.py
+Icon=applications-graphics
+Terminal=false
+Categories=Graphics;3DGraphics;Photography;
+Keywords=colmap;3d;quet;anh;camera;gaussian;splatting;
+StartupNotify=true
+StartupWMClass=io.github.ryanhuhut.quet3d
