@@ -85,6 +85,57 @@ cuối chồng lấn với ảnh đầu. Bỏ sót chỗ khép vòng đó khiế
 
 ## Bắt đầu nhanh
 
+### Chặng 0 — nén ảnh về 1600px trước đã
+
+Làm trước tiên. Ghép ảnh 4000px không tốt hơn ghép ảnh 1600px gấp sáu lần, chỉ
+chậm hơn thôi — COLMAP tự hạ về 3200px, còn Gaussian Splatting 1600px là đủ đẹp.
+Nén trước cũng kéo dung lượng phải tải lên từ vài GB xuống vài trăm MB.
+
+Cần ImageMagick 7 (lệnh `magick`). Sửa ba dòng đầu, phần còn lại dán nguyên:
+
+```bash
+# ==================== SUA O DAY ====================
+NGUON="/home/ryanhuhut/Downloads/Cap-GB"        # thu muc anh goc — doi khi quet vat khac
+DICH="/home/ryanhuhut/quet3d/Cap-GB_1600"       # thu muc dich — nen dat theo ten du an
+DUOI="jpg"                                       # duoi anh: jpg / jpeg / png
+# ===================================================
+
+cd "$NGUON" || { echo "KHONG THAY THU MUC"; exit 1; }
+
+echo "--- So anh: $(ls *.$DUOI 2>/dev/null | wc -l)"
+echo "--- Tieu cu EXIF (phai ra MOT dong duy nhat):"
+magick identify -format "%[EXIF:FocalLengthIn35mmFilm] " *.$DUOI 2>/dev/null | tr ' ' '\n' | sort | uniq -c
+
+mkdir -p "$DICH"
+echo "--- Dang thu nho, doi vai phut..."
+magick mogrify -path "$DICH" -resize 1600x1600 -quality 93 *.$DUOI
+
+echo "--- XONG: $(ls "$DICH" | wc -l) anh, $(du -sh "$DICH" | cut -f1)"
+```
+
+Dòng EXIF mới là dòng quan trọng. **Nó phải in ra đúng một hàng.** Ra hai hàng
+nghĩa là trong thư mục có hai tiêu cự khác nhau — zoom bị xê dịch, hoặc ảnh của
+hai máy — và lúc đó một model camera không tả nổi tất cả. Hoặc bỏ mấy tấm lạc
+loài đi, hoặc đặt `SINGLE_CAMERA = False` ở chặng 1.
+
+Xong thì đóng gói thư mục vừa nén:
+
+```bash
+# ==================== SUA O DAY ====================
+DICH="/home/ryanhuhut/quet3d/Cap-GB_1600"    # thu muc anh da thu nho — dung ten o lenh truoc
+# ===================================================
+
+cd "$(dirname "$DICH")" || exit 1
+zip -r -0 "$(basename "$DICH").zip" "$(basename "$DICH")"
+echo "--- XONG: $(du -sh "$(basename "$DICH").zip" | cut -f1)"
+```
+
+`-0` là chỉ gói lại, không nén. JPEG vốn đã nén rồi; bắt zip nén thêm lần nữa
+tốn vài phút mà chẳng bớt được byte nào. Đưa file zip đó lên Drive.
+
+Ảnh nằm ngay tầng gốc của zip hay nằm trong một thư mục con đều được — chặng 1
+tự tìm ra, và tự bỏ qua `__MACOSX/` cùng các file ẩn.
+
 ### Chặng 1 — ghép ảnh, trên Colab
 
 Mở [`notebooks/1_match_images_colab.ipynb`](notebooks/1_match_images_colab.ipynb)
@@ -130,10 +181,49 @@ Cần GTK4 và libadwaita — hai thứ có sẵn trên mọi bản GNOME hiện
 
 ### Chặng 3 — huấn luyện, trên Colab
 
-Đưa thư mục kết quả lên Drive, mở
+Chặng 2 để lại cho bạn một thư mục như thế này:
+
+```
+Mèo_3d/
+├── images/                      ← CẦN: ảnh đã nắn méo, tên y hệt ảnh gốc
+├── sparse/0/
+│   ├── cameras.bin              ← CẦN: thông số ống kính
+│   ├── images.bin               ← CẦN: vị trí + hướng của từng ảnh (cái chạy 2 tiếng)
+│   └── points3D.bin             ← CẦN: đám mây điểm thưa
+├── distorted/
+│   ├── database.db              ← không cần, và là file NẶNG NHẤT (vài GB)
+│   └── sparse/0/*.bin           ← không cần: mô hình lúc chưa nắn méo
+├── stereo/                      ← không cần: khung rỗng cho dựng dày
+└── run-colmap-*.sh              ← không cần: script COLMAP tự sinh
+```
+
+Đóng gói cả cụm thành một file rồi tải lên:
+
+```bash
+# ==================== SUA O DAY ====================
+CANH="/home/ryanhuhut/quet3d/Mèo_3d"    # thu muc chang 2 vua tao ra
+# ===================================================
+
+cd "$(dirname "$CANH")" || exit 1
+TEN="$(basename "$CANH")"
+zip -r -0 "${TEN%_3d}.zip" "$TEN" -x "$TEN/distorted/*" "$TEN/stereo/*"
+echo "--- XONG: $(du -sh "${TEN%_3d}.zip" | cut -f1)"
+```
+
+Hai cái `-x` bỏ `distorted/` và `stereo/` ra ngoài. Có để lại thì notebook cũng
+tự bỏ qua, nhưng `database.db` thường nặng vài GB — tải lên là mất đứt một tiếng
+đồng hồ không đổi lại được gì.
+
+Rồi mở
 [`notebooks/3_train_gaussian_splatting_colab.ipynb`](notebooks/3_train_gaussian_splatting_colab.ipynb),
-sửa ô cấu hình, chạy hết. Mỗi mốc lưu được chép sang Drive ngay khi xuất hiện,
-nên Colab có ngắt giữa chừng thì phần đã xong vẫn còn nguyên.
+dán đường dẫn file zip đó vào **ô số 3 — dòng duy nhất bạn phải sửa** — và chạy
+hết. Notebook tự tìm `images/` với `sparse/0/` nằm ở tầng nào cũng ra, chỉ giải
+nén đúng hai thứ đó, tự đặt tên kết quả theo tên file zip (`Mèo.zip` →
+`Meo_30000.ply`), rồi train. Đưa `.tar.gz` hay để nguyên thư mục trên Drive cũng
+chạy y như vậy.
+
+Mỗi mốc lưu được chép sang Drive ngay khi xuất hiện, nên Colab có ngắt giữa
+chừng thì phần đã xong vẫn còn nguyên.
 
 ---
 

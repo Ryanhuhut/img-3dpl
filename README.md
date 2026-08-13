@@ -86,6 +86,58 @@ lets the reconstruction drift.
 
 ## Quick start
 
+### Stage 0 — shrink the photos to 1600px first
+
+Do this before anything else. Matching 4000px photos is not 6x better than
+matching 1600px photos, it is just slower — COLMAP downsizes to 3200px on its
+own anyway, and Gaussian Splatting is happy at 1600px. Shrinking first also cuts
+the upload from gigabytes to a few hundred megabytes.
+
+Needs ImageMagick 7 (`magick`). Edit the three lines at the top, paste the rest:
+
+```bash
+# ==================== EDIT THIS ====================
+SRC="/home/you/Downloads/Cap-GB"        # folder of original photos
+DST="/home/you/quet3d/Cap-GB_1600"      # destination — name it after the scan
+EXT="jpg"                               # extension: jpg / jpeg / png
+# ===================================================
+
+cd "$SRC" || { echo "NO SUCH FOLDER"; exit 1; }
+
+echo "--- Photos: $(ls *.$EXT 2>/dev/null | wc -l)"
+echo "--- EXIF focal length (must print ONE row only):"
+magick identify -format "%[EXIF:FocalLengthIn35mmFilm] " *.$EXT 2>/dev/null | tr ' ' '\n' | sort | uniq -c
+
+mkdir -p "$DST"
+echo "--- Shrinking, this takes a few minutes..."
+magick mogrify -path "$DST" -resize 1600x1600 -quality 93 *.$EXT
+
+echo "--- DONE: $(ls "$DST" | wc -l) photos, $(du -sh "$DST" | cut -f1)"
+```
+
+The EXIF line is the important one. **It must print a single row.** Two rows
+means two different focal lengths in the folder — a zoom that moved, or photos
+from two cameras — and one camera model can no longer describe them all. Either
+throw out the odd ones, or set `SINGLE_CAMERA = False` in stage 1.
+
+Then pack the shrunk folder into a zip:
+
+```bash
+# ==================== EDIT THIS ====================
+DST="/home/you/quet3d/Cap-GB_1600"    # same folder as above
+# ===================================================
+
+cd "$(dirname "$DST")" || exit 1
+zip -r -0 "$(basename "$DST").zip" "$(basename "$DST")"
+echo "--- DONE: $(du -sh "$(basename "$DST").zip" | cut -f1)"
+```
+
+`-0` means store, no compression. JPEG is already compressed; asking zip to
+squeeze it again costs minutes and saves nothing. Upload that zip to Drive.
+
+The photos may sit at the top of the zip or inside a folder — stage 1 finds them
+either way, and ignores `__MACOSX/` and hidden files.
+
 ### Stage 1 — matching, on Colab
 
 Open [`notebooks/1_match_images_colab.ipynb`](notebooks/1_match_images_colab.ipynb)
@@ -132,10 +184,49 @@ Requires GTK4 and libadwaita, which ship with any current GNOME desktop
 
 ### Stage 3 — training, on Colab
 
-Upload the output folder to Drive, open
+Stage 2 leaves you a folder like this:
+
+```
+Meo_3d/
+├── images/                      ← needed: undistorted photos
+├── sparse/0/
+│   ├── cameras.bin              ← needed: lens parameters
+│   ├── images.bin               ← needed: position and rotation of each photo
+│   └── points3D.bin             ← needed: the sparse cloud
+├── distorted/
+│   ├── database.db              ← not needed, and by far the biggest file
+│   └── sparse/0/*.bin           ← not needed: the model before undistortion
+├── stereo/                      ← not needed: empty scaffolding for dense
+└── run-colmap-*.sh              ← not needed
+```
+
+Zip the whole thing and upload one file:
+
+```bash
+# ==================== EDIT THIS ====================
+SCENE="/home/you/quet3d/Meo_3d"    # the folder stage 2 produced
+# ===================================================
+
+cd "$(dirname "$SCENE")" || exit 1
+NAME="$(basename "$SCENE")"
+zip -r -0 "${NAME%_3d}.zip" "$NAME" -x "$NAME/distorted/*" "$NAME/stereo/*"
+echo "--- DONE: $(du -sh "${NAME%_3d}.zip" | cut -f1)"
+```
+
+The `-x` flags leave out `distorted/` and `stereo/`. The notebook skips them by
+itself if you include them, but `database.db` is usually several gigabytes and
+uploading it is an hour you never get back.
+
+Then open
 [`notebooks/3_train_gaussian_splatting_colab.ipynb`](notebooks/3_train_gaussian_splatting_colab.ipynb),
-edit the configuration cell, run all cells. Checkpoints are copied to Drive as
-they appear, so a dropped session costs you nothing already finished.
+paste the path to that zip into **cell 3 — the only line you have to edit** —
+and run all cells. It finds `images/` and `sparse/0/` at whatever depth they
+sit, extracts only those two, names the output after the zip (`Meo.zip` →
+`Meo_30000.ply`), and trains. A `.tar.gz` or a plain folder on Drive works just
+as well.
+
+Checkpoints are copied to Drive as they appear, so a dropped session costs you
+nothing already finished.
 
 ---
 
