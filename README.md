@@ -51,14 +51,14 @@ registering images is inherently sequential: each new photo depends on the ones
 already placed. Free-tier Colab gives you 2 CPU cores. Most laptops have more.
 
 ```
-   photos  ──►  [1] Colab GPU      ──►  database.db
-                    match pairs
+ photos at 1600px ──►  [1] Colab GPU     ──►  Meo_1600.db
+      as .zip               match pairs
 
-database.db ──►  [2] desktop app   ──►  images/ + sparse/0/
-   + photos         camera positions
+    Meo_1600.db   ──►  [2] desktop app   ──►  Meo_1600_3d/
+ + those same photos      camera positions      images/ + sparse/0/
 
-  sparse/0  ──►  [3] Colab GPU     ──►  .ply model
-                    train 3DGS
+  Meo_1600_3d/    ──►  [3] Colab GPU     ──►  Meo_1600.ply
+      as .zip               train 3DGS
 ```
 
 ---
@@ -85,6 +85,19 @@ lets the reconstruction drift.
 ---
 
 ## Quick start
+
+Five stages, numbered 0 to 3 below. Three of the joins between them are where
+people lose an afternoon:
+
+| Between | What goes wrong | What to do |
+|---|---|---|
+| 1 → 2 | Downloading the whole Drive folder | Download **only** the `.db`. The photos are already on your machine — the 1600px folder from stage 0 |
+| 2 | Feeding the app the **original** photos | Give it the **1600px folder**, the one you uploaded. Same file names, different pixels; nothing errors, the model just comes out wrong |
+| 0 → 1 | Unzipping by hand, or reshaping the zip | Neither notebook cares. They find the photos, and `images/` + `sparse/0/`, at any depth inside the archive |
+
+And name each scan. The database is saved as `Meo_1600.db`, not `database.db`,
+so two projects cannot end up as two identical file names in one downloads
+folder.
 
 ### Stage 0 — shrink the photos to 1600px first
 
@@ -142,7 +155,13 @@ either way, and ignores `__MACOSX/` and hidden files.
 
 Open [`notebooks/1_match_images_colab.ipynb`](notebooks/1_match_images_colab.ipynb)
 in Colab, set the runtime to **T4 GPU**, edit the configuration cell, run all
-cells. You get a `database.db` on your Drive.
+cells. Nothing needs unzipping by hand — the notebook does that, and finds the
+photos whether they sit at the top of the zip or inside a folder.
+
+You get `Cap-GB_1600.db` on your Drive, named after your zip rather than the
+`database.db` every tutorial produces. That matters the moment you have two
+scans: two files called `database.db` in one downloads folder is how the wrong
+one gets fed to stage 2, and you learn about it two hours later.
 
 Installing COLMAP inside Colab takes **7 seconds** — it is a prebuilt,
 self-contained tarball, no `apt install`, no `ldconfig`:
@@ -158,9 +177,10 @@ The last line must print `with CUDA`.
 
 ### Stage 2 — camera positions, on your machine
 
-Download `database.db` from Drive, then run the desktop app. It needs Docker and
-nothing else — COLMAP runs inside a container, so nothing is installed on your
-system.
+Download the `.db` from Drive — **just that one file.** The photos are already on
+your machine: they are the 1600px folder you made in stage 0. Then run the
+desktop app. It needs Docker and nothing else — COLMAP runs inside a container,
+so nothing is installed on your system.
 
 ```bash
 git clone https://github.com/Ryanhuhut/img-3dpl
@@ -178,6 +198,15 @@ Drop in the photo folder and the `.db` file, press start. It shows elapsed time,
 a live progress bar driven by COLMAP's own output, a time estimate, and a large
 warning so nobody shuts the machine down mid-run. It also blocks the system from
 suspending while it works.
+
+**The photo folder must be the 1600px one you uploaded, not the originals.** The
+file names are identical either way, so nothing complains — but the camera
+parameters inside the `.db` describe the 1600px images, and handing COLMAP the
+full-size ones produces a reconstruction that is wrong rather than one that
+fails. Keep that folder around; do not delete it after uploading the zip.
+
+Output lands next to the photo folder as `<folder>_3d/`, so `Cap-GB_1600/`
+gives you `Cap-GB_1600_3d/`.
 
 Requires GTK4 and libadwaita, which ship with any current GNOME desktop
 (`python3-gobject gtk4 libadwaita`). The interface is in Vietnamese.

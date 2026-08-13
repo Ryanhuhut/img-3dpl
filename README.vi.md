@@ -51,14 +51,14 @@ khâu định vị từng ảnh thì tuần tự về bản chất: ảnh mới 
 thường có nhiều hơn.
 
 ```
-   ảnh    ──►  [1] GPU Colab      ──►  database.db
-                   ghép các cặp
+ ảnh đã về 1600px ──►  [1] GPU Colab     ──►  Meo_1600.db
+       dạng .zip            ghép các cặp
 
-database.db ──►  [2] app máy tính ──►  images/ + sparse/0/
-   + ảnh            dựng camera
+    Meo_1600.db   ──►  [2] app máy tính  ──►  Meo_1600_3d/
+   + đúng ảnh đó           dựng camera          images/ + sparse/0/
 
-  sparse/0 ──►  [3] GPU Colab     ──►  mô hình .ply
-                   huấn luyện
+   Meo_1600_3d/   ──►  [3] GPU Colab     ──►  Meo_1600.ply
+       dạng .zip            huấn luyện
 ```
 
 ---
@@ -84,6 +84,19 @@ cuối chồng lấn với ảnh đầu. Bỏ sót chỗ khép vòng đó khiế
 ---
 
 ## Bắt đầu nhanh
+
+Bốn chặng, đánh số 0 đến 3 bên dưới. Ba chỗ nối giữa chúng là nơi người ta mất
+toi cả buổi chiều:
+
+| Chỗ nối | Hay sai thế nào | Làm đúng |
+|---|---|---|
+| 1 → 2 | Tải cả thư mục trên Drive về | Chỉ tải **mỗi file `.db`**. Ảnh đã nằm sẵn trên máy rồi — chính là thư mục 1600px làm ở chặng 0 |
+| 2 | Thả **ảnh gốc** vào app | Phải thả **thư mục ảnh 1600px**, đúng cái đã đưa lên Colab. Tên file y hệt nhau nên không có lỗi nào báo cả, chỉ có mô hình dựng ra là sai |
+| 0 → 1 | Tự giải nén, hoặc sắp lại zip cho "đúng chuẩn" | Không cần. Cả hai notebook tự tìm ảnh, và tự tìm `images/` + `sparse/0/`, nằm sâu mấy tầng cũng ra |
+
+Và đặt tên cho từng dự án. File database được lưu thành `Meo_1600.db` chứ không
+phải `database.db`, để hai dự án không bao giờ biến thành hai file trùng tên nằm
+chung một thư mục Downloads.
 
 ### Chặng 0 — nén ảnh về 1600px trước đã
 
@@ -140,7 +153,14 @@ tự tìm ra, và tự bỏ qua `__MACOSX/` cùng các file ẩn.
 
 Mở [`notebooks/1_match_images_colab.ipynb`](notebooks/1_match_images_colab.ipynb)
 bằng Colab, chọn `Runtime` → `Change runtime type` → **T4 GPU**, sửa ô cấu hình,
-rồi chạy hết. Kết quả là file `database.db` nằm trên Drive của bạn.
+rồi chạy hết. Không phải tự giải nén gì cả — notebook tự làm, và tự tìm ra ảnh
+dù chúng nằm ngay tầng gốc của zip hay nằm trong thư mục con.
+
+Kết quả là file `Cap-GB_1600.db` nằm trên Drive, đặt tên theo file zip của bạn
+chứ không phải `database.db` như mọi hướng dẫn khác. Chuyện tên gọi này thành
+quan trọng ngay khi bạn có dự án thứ hai: hai file cùng tên `database.db` nằm
+chung thư mục Downloads chính là cách file sai lọt vào chặng 2, và hai tiếng sau
+bạn mới biết.
 
 Cài COLMAP trong Colab mất **7 giây** — gói dựng sẵn, tự chứa, không cần
 `apt install`, không cần `ldconfig`:
@@ -156,8 +176,10 @@ Dòng cuối phải in ra chữ `with CUDA`.
 
 ### Chặng 2 — dựng vị trí camera, trên máy bạn
 
-Tải `database.db` từ Drive về, rồi chạy app. Nó chỉ cần Docker, không cần gì
-khác — COLMAP chạy bên trong container nên máy bạn không bị cài thêm thứ gì.
+Tải file `.db` từ Drive về — **chỉ mỗi file đó thôi.** Ảnh thì đã nằm sẵn trên
+máy rồi: chính là thư mục 1600px bạn tạo ở chặng 0. Rồi chạy app. Nó chỉ cần
+Docker, không cần gì khác — COLMAP chạy bên trong container nên máy bạn không bị
+cài thêm thứ gì.
 
 ```bash
 git clone https://github.com/Ryanhuhut/img-3dpl
@@ -175,6 +197,24 @@ Thả thư mục ảnh và file `.db` vào, bấm Bắt đầu. App hiện đồ
 tiến độ đọc trực tiếp từ output của COLMAP, ước lượng thời gian còn lại, và một
 bảng cảnh báo đỏ to đùng để không ai lỡ tay tắt máy giữa chừng. Nó cũng chặn máy
 tự ngủ trong lúc làm việc.
+
+**Thư mục ảnh phải là thư mục 1600px đã đưa lên Colab, không phải ảnh gốc.** Tên
+file hai bên y hệt nhau nên chẳng có lỗi nào báo cả — nhưng thông số camera nằm
+trong file `.db` là của ảnh 1600px, đưa ảnh gốc chưa thu nhỏ vào thì mô hình
+dựng ra sai chứ không phải chạy hỏng. Nhớ giữ thư mục đó lại, đừng xoá sau khi
+đã đóng zip đưa lên Drive.
+
+Kết quả nằm cạnh thư mục ảnh, tên là `<tên thư mục>_3d/` — `Cap-GB_1600/` sẽ cho
+ra `Cap-GB_1600_3d/`.
+
+**Thư mục ảnh phải là thư mục 1600px đã đưa lên Colab, không phải ảnh gốc.** Tên
+file hai bên y hệt nhau nên chẳng có gì báo lỗi — nhưng thông số camera nằm
+trong file `.db` mô tả đúng những tấm 1600px, đưa ảnh gốc chưa thu nhỏ vào thì
+COLMAP không chết, nó chỉ dựng ra một mô hình sai. Giữ thư mục đó lại, đừng xoá
+sau khi đã tải zip lên.
+
+Kết quả nằm ngay cạnh thư mục ảnh, tên là `<tên thư mục>_3d/` — `Cap-GB_1600/`
+thì ra `Cap-GB_1600_3d/`.
 
 Cần GTK4 và libadwaita — hai thứ có sẵn trên mọi bản GNOME hiện hành
 (`python3-gobject gtk4 libadwaita`).

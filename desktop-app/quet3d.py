@@ -3,9 +3,14 @@
 Quét 3D — dựng vị trí camera từ file database đã ghép sẵn trên Google Colab.
 
 Cách làm việc:
-  1. Trên Colab (có GPU T4): tách đặc trưng + ghép ảnh  →  ra file database.db
-  2. Tải database.db về máy
-  3. Mở app này: thả thư mục ảnh và file database.db vào, bấm Bắt đầu
+  1. Trên Colab (có GPU T4): tách đặc trưng + ghép ảnh  →  ra file <dự án>.db
+  2. Tải file .db đó về máy
+  3. Mở app này: thả thư mục ảnh và file .db vào, bấm Bắt đầu
+
+Thư mục ảnh phải là đúng thư mục đã đưa lên Colab ở bước 1 — thường là bản đã
+thu nhỏ về 1600px. Thông số camera trong file .db mô tả đúng những tấm ảnh đó;
+đưa ảnh gốc chưa thu nhỏ vào thì tên file vẫn khớp nhưng kích thước thì không,
+và mô hình dựng ra sẽ sai.
 
 Vì sao chia đôi như vậy: ghép ảnh cần GPU, mà máy này không có card NVIDIA.
 Còn dựng vị trí camera thì GPU không giúp được gì — nó chạy trên CPU, mà máy
