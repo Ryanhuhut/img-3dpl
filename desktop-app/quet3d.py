@@ -112,19 +112,38 @@ THU_MUC_MANG_DI = ("images", "sparse")
 # chặng 3 train ở đúng cỡ này. Muốn train ở 3200px thì phải chọn 3200 NGAY TỪ
 # ĐÂY — thêm cờ ở chặng 3 là vô ích, độ phân giải đã bị khoá từ trước rồi.
 #
-# 1600px là mặc định cũ và vẫn đúng cho hầu hết trường hợp. Chỉ lên 2400 hoặc
-# 3200 khi trong ảnh có chữ nhỏ cần đọc được: chữ cao 20px trên ảnh 3200px chỉ
-# còn 10px khi hạ về 1600px, sát ngưỡng Nyquist, qua JPEG nữa là mất hẳn.
+# Vì sao cỡ ảnh KHÔNG phải một hằng số: mỗi loại cảnh có một cỡ đúng riêng, và
+# một con số cứng thì loại nào cũng sai một nửa. Bảng dưới đây là bản sao của
+# PRESETS[...]["pipeline"]["resize_px"] trong notebook chặng 3 — sửa một bên
+# thì phải sửa bên kia, không thì ảnh chụp một cỡ mà train một cỡ khác.
+#
+#   FLAT_OBJECT     3200  chữ cao 20px trên ảnh 3200px hạ về 1600px chỉ còn
+#                         10px, sát ngưỡng Nyquist, qua JPEG nữa là mất hẳn.
+#   COMPLEX_OBJECT  2400  nhiều gờ cạnh nhưng ít chữ — gờ cạnh sống sót qua
+#                         phép thu nhỏ tốt hơn nét chữ nhiều.
+#   ENTIRE_ROOM     1600  phòng cần phủ rộng chứ không cần đọc chữ, mà phòng
+#                         thì đi kèm 300-400 tấm nên RAM chặng 3 không kham
+#                         nổi cỡ lớn hơn.
+#
+# 3200px là trần có ích chứ không phải trần tuỳ ý: COLMAP tự hạ ảnh xuống
+# max_image_size (mặc định 3200) để dò đặc trưng rồi mới nhân toạ độ keypoint
+# trở lại cỡ gốc. Nạp ảnh to hơn 3200px là trả tiền tải lên mà không nhận thêm
+# đặc trưng nào.
 #
 # Đổi lại: ảnh 3200px nặng gấp bốn, chặng 3 train chậm khoảng ba lần, và RAM
 # của Colab free chỉ chứa nổi chừng 450 tấm ở cỡ đó. Bù lại thì nên chụp ít
 # ảnh hơn — 160 ảnh 3200px về đích nhanh hơn 320 ảnh 1600px mà lại nét hơn,
 # vì số cặp ảnh phải ghép ở chặng 1 giảm bốn lần.
-CO_ANH = [
-    (1600, "1600 px — mặc định, hợp cho cả căn phòng"),
-    (2400, "2400 px — vật thể nhiều gờ cạnh"),
-    (3200, "3200 px — vật thể có chữ nhỏ cần đọc được"),
-]
+PRESET_ANH = {
+    "FLAT_OBJECT":    (3200, "Vật thể có chữ nhỏ cần đọc được — 3200 px"),
+    "COMPLEX_OBJECT": (2400, "Vật thể nhiều gờ cạnh, ít chữ — 2400 px"),
+    "ENTIRE_ROOM":    (1600, "Cả căn phòng — 1600 px"),
+}
+
+# Thứ tự hiện trong ô chọn. Cái đầu tiên là mặc định, và mặc định bây giờ là
+# FLAT_OBJECT chứ không còn là 1600px: quét vật thể là việc app này làm nhiều
+# nhất, mà chọn thiếu độ phân giải thì không có đường sửa ở chặng sau.
+THU_TU_PRESET = ["FLAT_OBJECT", "COMPLEX_OBJECT", "ENTIRE_ROOM"]
 
 # Chất lượng 93 là mức mắt thường không thấy khác mà tệp nhẹ đi mấy lần.
 CHAT_LUONG = 93
@@ -328,7 +347,7 @@ def doc_con_lai(giay: float) -> str:
 
 class TrangNenAnh(Gtk.Box):
     """
-    Thu nhỏ ảnh còn 1600px rồi gói lại thành một tệp mang lên Colab.
+    Thu nhỏ ảnh theo cỡ của preset rồi gói lại thành một tệp mang lên Colab.
 
     Gói PHẲNG: ảnh nằm thẳng ở gốc tệp nén, không có thư mục bọc bên ngoài —
     giải nén ra là thấy ảnh ngay. Khác với "zip -r" trong script cũ, vốn bọc
@@ -344,7 +363,8 @@ class TrangNenAnh(Gtk.Box):
         self.dang_chay = False
         self.bi_huy = False
         self.dich_tu_dien = ""      # đường dẫn ra do tool tự điền, chưa ai sửa
-        self.canh = CO_ANH[0][0]    # cỡ ảnh của lần nén đang chạy
+        # Cỡ ảnh của lần nén đang chạy, chốt theo preset đang chọn.
+        self.canh = PRESET_ANH[THU_TU_PRESET[0]][0]
 
         cuon = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER,
                                   vexpand=True)
@@ -372,11 +392,15 @@ class TrangNenAnh(Gtk.Box):
         self.o_dich.add_suffix(self._nut_duyet(self._chon_dich))
         nhom.add(self.o_dich)
 
-        # Chọn cỡ ảnh ở đây là chốt luôn cho cả ba chặng sau — xem CO_ANH.
+        # Chọn loại cảnh ở đây là chốt luôn cỡ ảnh cho cả ba chặng sau — xem
+        # PRESET_ANH. Người dùng chọn thứ mình biết ("tôi chụp cái gì"), không
+        # phải thứ mình phải tự suy ra ("nên để bao nhiêu pixel").
         self.o_canh = Adw.ComboRow(
-            title="Thu nhỏ cạnh dài về",
-            subtitle="Chọn 3200 nếu cần đọc được chữ nhỏ trên vật thể",
-            model=Gtk.StringList.new([ten for _, ten in CO_ANH]))
+            title="Loại cảnh đang quét",
+            subtitle="Quyết định cỡ ảnh, và cỡ ảnh thì không sửa lại được ở "
+                     "chặng sau",
+            model=Gtk.StringList.new(
+                [PRESET_ANH[ten][1] for ten in THU_TU_PRESET]))
         self.o_canh.connect("notify::selected", self._khi_doi_canh)
         nhom.add(self.o_canh)
 
@@ -466,9 +490,13 @@ class TrangNenAnh(Gtk.Box):
     def _duoi_dang_chon(self) -> str:
         return KIEU_NEN[self.o_kieu.get_selected()][0]
 
+    def _preset(self) -> str:
+        """Tên preset đang chọn, đúng tên dùng ở notebook chặng 3."""
+        return THU_TU_PRESET[self.o_canh.get_selected()]
+
     def _canh(self) -> int:
-        """Cạnh dài đang chọn, tính bằng pixel."""
-        return CO_ANH[self.o_canh.get_selected()][0]
+        """Cạnh dài đang chọn, tính bằng pixel. Suy ra từ preset, không nhập tay."""
+        return PRESET_ANH[self._preset()][0]
 
     def _khi_doi_nguon(self, *_):
         """Tự điền đường dẫn ra theo tên thư mục ảnh — trừ khi người dùng đã sửa."""
