@@ -7,6 +7,12 @@ không có card đồ hoạ nào chạy được.
 
 [English version → README.md](README.md)
 
+**Phạm vi:** quy trình này quét **vật thể lẻ** — hộp bài, bìa sách, trang
+truyện. Quét **cả căn phòng** thì đang làm dở và hiện bị khoá: chặng 3 xong
+rồi, chặng 1 và 2 thì chưa. Chọn preset phòng sẽ báo lỗi ngay thay vì để bạn
+mất năm tiếng lấy về một kết quả không dùng được. Chi tiết ở
+[`docs/ROOM_MODE.md`](docs/ROOM_MODE.md).
+
 ---
 
 ## Thật sự không cần GPU
@@ -90,19 +96,42 @@ toi cả buổi chiều:
 
 | Chỗ nối | Hay sai thế nào | Làm đúng |
 |---|---|---|
-| 1 → 2 | Tải cả thư mục trên Drive về | Chỉ tải **mỗi file `.db`**. Ảnh đã nằm sẵn trên máy rồi — chính là thư mục 1600px làm ở chặng 0 |
-| 2 | Thả **ảnh gốc** vào app | Phải thả **thư mục ảnh 1600px**, đúng cái đã đưa lên Colab. Tên file y hệt nhau nên không có lỗi nào báo cả, chỉ có mô hình dựng ra là sai |
+| 1 → 2 | Tải cả thư mục trên Drive về | Chỉ tải **mỗi file `.db`**. Ảnh đã nằm sẵn trên máy rồi — chính là thư mục đã thu nhỏ ở chặng 0 |
+| 2 | Thả **ảnh gốc** vào app | Phải thả **thư mục ảnh đã thu nhỏ**, đúng cái đã đưa lên Colab. Tên file y hệt nhau nên không có lỗi nào báo cả, chỉ có mô hình dựng ra là sai |
 | 0 → 1 | Tự giải nén, hoặc sắp lại zip cho "đúng chuẩn" | Không cần. Cả hai notebook tự tìm ảnh, và tự tìm `images/` + `sparse/0/`, nằm sâu mấy tầng cũng ra |
 
 Và đặt tên cho từng dự án. File database được lưu thành `Meo_1600.db` chứ không
 phải `database.db`, để hai dự án không bao giờ biến thành hai file trùng tên nằm
 chung một thư mục Downloads.
 
-### Chặng 0 — nén ảnh về 1600px trước đã
+### Chặng 0 — thu nhỏ ảnh trước đã
 
-Làm trước tiên. Ghép ảnh 4000px không tốt hơn ghép ảnh 1600px gấp sáu lần, chỉ
-chậm hơn thôi — COLMAP tự hạ về 3200px, còn Gaussian Splatting 1600px là đủ đẹp.
-Nén trước cũng kéo dung lượng phải tải lên từ vài GB xuống vài trăm MB.
+Làm trước tiên. Ghép ảnh 4000px không tốt hơn ghép ảnh nhỏ hơn, chỉ chậm hơn
+thôi — COLMAP tự hạ về 3200px để dò đặc trưng. Nén trước cũng kéo dung lượng
+phải tải lên từ vài GB xuống vài trăm MB.
+
+**Chọn cỡ ảnh ở đây, không phải để lát nữa.** Chọn gì thì cỡ đó đi xuyên suốt
+phần còn lại: database chặng 1 ghi thông số camera của đúng cỡ này, chặng 2 nắn
+méo ra đúng cỡ này, chặng 3 train ở đúng cỡ này. Thêm cờ ở chặng 3 không gỡ lại
+được quyết định đã chốt ở đây.
+
+| cỡ | dùng khi | cái giá |
+|---|---|---|
+| **1600px** | vật thể không có chữ nhỏ — mặc định cũ | nhanh nhất ở mọi chặng |
+| **2400px** | vật thể nhiều gờ cạnh | |
+| **3200px** | vật thể có chữ nhỏ cần đọc được | gấp bốn số điểm ảnh, chặng 3 chậm khoảng ba lần, và RAM Colab free chỉ chứa nổi chừng 450 tấm ở cỡ này |
+
+Chữ cao 20px trên ảnh 3200px hạ về 1600px chỉ còn 10px — sát ngưỡng Nyquist, và
+qua JPEG chất lượng 93 nữa thì gần như không còn gì. Mất ở chặng 0 thì không
+tham số train nào lấy lại được.
+
+Lên cỡ lớn thì nên chụp ít ảnh đi: 160 ảnh 3200px về đích nhanh hơn 320 ảnh
+1600px mà lại nét hơn, vì chặng 1 chỉ phải ghép một phần tư số cặp (12.720 thay
+vì 51.040).
+
+App máy tính làm sẵn việc này — nút **Nén ảnh** ở màn hình chính vừa thu nhỏ,
+vừa kiểm tra EXIF, vừa gói lại thành một tệp. Đoạn script dưới đây là làm tay
+đúng ngần ấy việc.
 
 Cần ImageMagick 7 (lệnh `magick`). Sửa ba dòng đầu, phần còn lại dán nguyên:
 
@@ -177,7 +206,7 @@ Dòng cuối phải in ra chữ `with CUDA`.
 ### Chặng 2 — dựng vị trí camera, trên máy bạn
 
 Tải file `.db` từ Drive về — **chỉ mỗi file đó thôi.** Ảnh thì đã nằm sẵn trên
-máy rồi: chính là thư mục 1600px bạn tạo ở chặng 0. Rồi chạy app. Nó chỉ cần
+máy rồi: chính là thư mục đã thu nhỏ bạn tạo ở chặng 0. Rồi chạy app. Nó chỉ cần
 Docker, không cần gì khác — COLMAP chạy bên trong container nên máy bạn không bị
 cài thêm thứ gì.
 
@@ -198,23 +227,17 @@ tiến độ đọc trực tiếp từ output của COLMAP, ước lượng th�
 bảng cảnh báo đỏ to đùng để không ai lỡ tay tắt máy giữa chừng. Nó cũng chặn máy
 tự ngủ trong lúc làm việc.
 
-**Thư mục ảnh phải là thư mục 1600px đã đưa lên Colab, không phải ảnh gốc.** Tên
-file hai bên y hệt nhau nên chẳng có lỗi nào báo cả — nhưng thông số camera nằm
-trong file `.db` là của ảnh 1600px, đưa ảnh gốc chưa thu nhỏ vào thì mô hình
-dựng ra sai chứ không phải chạy hỏng. Nhớ giữ thư mục đó lại, đừng xoá sau khi
-đã đóng zip đưa lên Drive.
+**Thư mục ảnh phải là đúng thư mục đã thu nhỏ và đưa lên Colab, không phải ảnh
+gốc.** Tên file hai bên y hệt nhau nên chẳng có lỗi nào báo cả — nhưng thông số
+camera nằm trong file `.db` mô tả đúng những tấm đã thu nhỏ ấy, đưa ảnh cỡ khác
+vào thì COLMAP không chết, nó chỉ dựng ra một mô hình sai. Nhớ giữ thư mục đó
+lại, đừng xoá sau khi đã đóng zip đưa lên Drive.
+
+Chuyện này đúng với mọi cỡ ảnh, không riêng 1600px: chặng 0 chọn 3200px thì
+chặng này phải nhận đúng thư mục 3200px.
 
 Kết quả nằm cạnh thư mục ảnh, tên là `<tên thư mục>_3d/` — `Cap-GB_1600/` sẽ cho
 ra `Cap-GB_1600_3d/`.
-
-**Thư mục ảnh phải là thư mục 1600px đã đưa lên Colab, không phải ảnh gốc.** Tên
-file hai bên y hệt nhau nên chẳng có gì báo lỗi — nhưng thông số camera nằm
-trong file `.db` mô tả đúng những tấm 1600px, đưa ảnh gốc chưa thu nhỏ vào thì
-COLMAP không chết, nó chỉ dựng ra một mô hình sai. Giữ thư mục đó lại, đừng xoá
-sau khi đã tải zip lên.
-
-Kết quả nằm ngay cạnh thư mục ảnh, tên là `<tên thư mục>_3d/` — `Cap-GB_1600/`
-thì ra `Cap-GB_1600_3d/`.
 
 Cần GTK4 và libadwaita — hai thứ có sẵn trên mọi bản GNOME hiện hành
 (`python3-gobject gtk4 libadwaita`).
@@ -256,14 +279,58 @@ tự bỏ qua, nhưng `database.db` thường nặng vài GB — tải lên là 
 
 Rồi mở
 [`notebooks/3_train_gaussian_splatting_colab.ipynb`](notebooks/3_train_gaussian_splatting_colab.ipynb),
-dán đường dẫn file zip đó vào **ô số 3 — dòng duy nhất bạn phải sửa** — và chạy
-hết. Notebook tự tìm `images/` với `sparse/0/` nằm ở tầng nào cũng ra, chỉ giải
-nén đúng hai thứ đó, tự đặt tên kết quả theo tên file zip (`Mèo.zip` →
-`Meo_30000.ply`), rồi train. Đưa `.tar.gz` hay để nguyên thư mục trên Drive cũng
-chạy y như vậy.
+dán đường dẫn file zip đó vào **ô số 6** và chạy hết. Notebook tự tìm `images/`
+với `sparse/0/` nằm ở tầng nào cũng ra, chỉ giải nén đúng hai thứ đó, tự đặt tên
+kết quả theo tên file zip (`Mèo.zip` → `Meo_30000.ply`), rồi train. Đưa
+`.tar.gz` hay để nguyên thư mục trên Drive cũng chạy y như vậy.
+
+Thêm một dòng nữa trong ô 6 chọn bộ tham số train:
+
+```python
+PRESET = "FLAT_OBJECT"   # "FLAT_OBJECT" | "COMPLEX_OBJECT"
+```
+
+`FLAT_OBJECT` chỉnh riêng cho việc đọc được chữ nhỏ trên mặt phẳng: nó đẩy nhiều
+hạt sang nhóm bị tách (`percent_dense` 0.005 thay vì 0.01), sinh hạt tới tận
+iter 20.000, và kìm tốc độ nở của hạt. `COMPLEX_OBJECT` nới lại ngần ấy cho vật
+thể chủ yếu là gờ cạnh, không có chữ.
+
+Một dòng nữa chọn mốc — đây là cách hai tính năng của bản Inria tháng 10/2024
+được bật lên từng cái một chứ không bật cả cụm:
+
+```python
+MILESTONE = "V2c"   # "V1_5" | "V2a" | "V2b" | "V2c"
+```
+
+| mốc | bộ vẽ | cờ mới |
+|---|---|---|
+| `V1_5` | `dr_aa` | không, và cũng không dùng bảng preset |
+| `V2a` | `3dgs_accel` | không |
+| `V2b` | `3dgs_accel` | `--antialiasing` |
+| `V2c` | `3dgs_accel` | `--antialiasing --optimizer_type sparse_adam` |
+
+`V2a` trông thừa nhưng không thừa. `train.py` truyền
+`separate_sh=SPARSE_ADAM_AVAILABLE`, nên chỉ **cài được** bộ vẽ tăng tốc là
+đường tính SH đã đổi, chưa bật cờ nào cả. Không có `V2a` thì không có nền trung
+tính và cải thiện đến từ đâu cũng không biết. Bù phơi sáng cố tình để ngoài đợt
+này — lý do và cách sửa một dòng để bật nó mà không phá `--eval` nằm ở
+[`docs/EXPOSURE.md`](docs/EXPOSURE.md).
+
+Ô 5 tính trước bộ ảnh ngốn bao nhiêu RAM và **dừng lại** nếu vượt 10,5 GB, kèm
+con số bao nhiêu tấm thì vừa. Ô 7 vá mã nguồn 3DGS cho năm thứ không có đường
+dòng lệnh nào tới được: ảnh dạng `uint8`, trần cứng số hạt, phạt hạt bị kéo dài,
+log số hạt + VRAM đỉnh mỗi 1000 iter, và bỏ cái `alpha_mask` toàn số 1 mà bản
+tháng 10/2024 cất cho từng camera (180 ảnh 3200px là 5,5 GB RAM trả cho một phép
+nhân với 1). Nó giữ bản `.bak` và chạy lại được.
 
 Mỗi mốc lưu được chép sang Drive ngay khi xuất hiện, nên Colab có ngắt giữa
 chừng thì phần đã xong vẫn còn nguyên.
+
+Ai dùng bản notebook cũ thì lưu ý: biến `LIMIT_VRAM` đã bị bỏ hẳn. Nó nhân đôi
+`densify_grad_threshold` và cắt densification sớm 3000 iter — đúng cái làm chữ
+nhỏ nhoè thành vệt ở iter 30.000. Nó tồn tại chỉ vì lệnh train cũ thiếu
+`--data_device cpu`, để 7,4 GB ảnh nằm chình ình trên VRAM của T4. Giờ cờ đó
+luôn được truyền, nên `LIMIT_VRAM` không còn lý do tồn tại.
 
 ---
 

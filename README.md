@@ -7,6 +7,12 @@ with no working graphics card.
 
 [Vietnamese version of this document → README.vi.md](README.vi.md)
 
+**Scope:** this pipeline scans **single objects** — a board-game box, a book
+cover, a page of text. Scanning a whole **room** is half-built and currently
+locked: stage 3 is done, stages 1 and 2 are not. Picking the room preset stops
+with an error instead of wasting five hours on a result you cannot use. Details
+in [`docs/ROOM_MODE.md`](docs/ROOM_MODE.md).
+
 ---
 
 ## No GPU required. Genuinely.
@@ -91,20 +97,43 @@ people lose an afternoon:
 
 | Between | What goes wrong | What to do |
 |---|---|---|
-| 1 → 2 | Downloading the whole Drive folder | Download **only** the `.db`. The photos are already on your machine — the 1600px folder from stage 0 |
-| 2 | Feeding the app the **original** photos | Give it the **1600px folder**, the one you uploaded. Same file names, different pixels; nothing errors, the model just comes out wrong |
+| 1 → 2 | Downloading the whole Drive folder | Download **only** the `.db`. The photos are already on your machine — the shrunk folder from stage 0 |
+| 2 | Feeding the app the **original** photos | Give it the **shrunk folder**, the one you uploaded. Same file names, different pixels; nothing errors, the model just comes out wrong |
 | 0 → 1 | Unzipping by hand, or reshaping the zip | Neither notebook cares. They find the photos, and `images/` + `sparse/0/`, at any depth inside the archive |
 
 And name each scan. The database is saved as `Meo_1600.db`, not `database.db`,
 so two projects cannot end up as two identical file names in one downloads
 folder.
 
-### Stage 0 — shrink the photos to 1600px first
+### Stage 0 — shrink the photos first
 
-Do this before anything else. Matching 4000px photos is not 6x better than
-matching 1600px photos, it is just slower — COLMAP downsizes to 3200px on its
-own anyway, and Gaussian Splatting is happy at 1600px. Shrinking first also cuts
-the upload from gigabytes to a few hundred megabytes.
+Do this before anything else. Matching 4000px photos is not better than matching
+smaller ones, it is just slower — COLMAP downsizes to 3200px for feature
+detection on its own anyway. Shrinking first also cuts the upload from gigabytes
+to a few hundred megabytes.
+
+**Pick the size here, not later.** Whatever you choose runs through everything
+that follows: the stage-1 database records camera parameters for exactly these
+pixels, stage 2 undistorts to exactly this size, and stage 3 trains at exactly
+this size. Adding a flag in stage 3 cannot undo a choice made here.
+
+| size | use it for | cost |
+|---|---|---|
+| **1600px** | objects with no fine print — the old default | fastest everywhere |
+| **2400px** | objects with a lot of edge detail | |
+| **3200px** | objects with small text you need to be able to read | 4x the pixels, ~3x the stage-3 training time, and Colab's free-tier RAM only holds about 450 photos at this size |
+
+Text 20px tall in a 3200px photo is only 10px tall at 1600px — right at the
+Nyquist limit, and after JPEG at quality 93 it is essentially gone. That is a
+stage-0 loss; no training parameter recovers it.
+
+Shoot fewer photos when you go bigger: 160 photos at 3200px finish sooner than
+320 at 1600px *and* come out sharper, because stage 1 matches a quarter as many
+pairs (12,720 instead of 51,040).
+
+The desktop app does this for you — the **Nén ảnh** button on the main screen
+resizes, checks EXIF, and packs the result in one go. The script below is the
+same thing by hand.
 
 Needs ImageMagick 7 (`magick`). Edit the three lines at the top, paste the rest:
 
@@ -178,7 +207,7 @@ The last line must print `with CUDA`.
 ### Stage 2 — camera positions, on your machine
 
 Download the `.db` from Drive — **just that one file.** The photos are already on
-your machine: they are the 1600px folder you made in stage 0. Then run the
+your machine: they are the shrunk folder you made in stage 0. Then run the
 desktop app. It needs Docker and nothing else — COLMAP runs inside a container,
 so nothing is installed on your system.
 
@@ -199,11 +228,14 @@ a live progress bar driven by COLMAP's own output, a time estimate, and a large
 warning so nobody shuts the machine down mid-run. It also blocks the system from
 suspending while it works.
 
-**The photo folder must be the 1600px one you uploaded, not the originals.** The
+**The photo folder must be the shrunk one you uploaded, not the originals.** The
 file names are identical either way, so nothing complains — but the camera
-parameters inside the `.db` describe the 1600px images, and handing COLMAP the
-full-size ones produces a reconstruction that is wrong rather than one that
+parameters inside the `.db` describe the shrunk images, and handing COLMAP a
+different size produces a reconstruction that is wrong rather than one that
 fails. Keep that folder around; do not delete it after uploading the zip.
+
+This holds at any size, not just 1600px: if stage 0 was run at 3200px, this
+stage needs the 3200px folder.
 
 Output lands next to the photo folder as `<folder>_3d/`, so `Cap-GB_1600/`
 gives you `Cap-GB_1600_3d/`.
@@ -248,14 +280,61 @@ uploading it is an hour you never get back.
 
 Then open
 [`notebooks/3_train_gaussian_splatting_colab.ipynb`](notebooks/3_train_gaussian_splatting_colab.ipynb),
-paste the path to that zip into **cell 3 — the only line you have to edit** —
-and run all cells. It finds `images/` and `sparse/0/` at whatever depth they
-sit, extracts only those two, names the output after the zip (`Meo.zip` →
-`Meo_30000.ply`), and trains. A `.tar.gz` or a plain folder on Drive works just
-as well.
+paste the path to that zip into **cell 6**, and run all cells. It finds
+`images/` and `sparse/0/` at whatever depth they sit, extracts only those two,
+names the output after the zip (`Meo.zip` → `Meo_30000.ply`), and trains. A
+`.tar.gz` or a plain folder on Drive works just as well.
+
+One more line in cell 6 picks the training preset:
+
+```python
+PRESET = "FLAT_OBJECT"   # "FLAT_OBJECT" | "COMPLEX_OBJECT"
+```
+
+`FLAT_OBJECT` is tuned for reading small text off a flat surface: it splits
+Gaussians more aggressively (`percent_dense` 0.005 instead of 0.01), keeps
+densifying to iteration 20,000, and holds scaling down. `COMPLEX_OBJECT` backs
+all of that off for objects that are mostly edges and no fine print.
+
+A second line picks the milestone, which is how the two features from Inria's
+October 2024 update get switched on one at a time:
+
+```python
+MILESTONE = "V2c"   # "V1_5" | "V2a" | "V2b" | "V2c"
+```
+
+| milestone | rasteriser | new flags |
+|---|---|---|
+| `V1_5` | `dr_aa` | none, and no preset table either |
+| `V2a` | `3dgs_accel` | none |
+| `V2b` | `3dgs_accel` | `--antialiasing` |
+| `V2c` | `3dgs_accel` | `--antialiasing --optimizer_type sparse_adam` |
+
+`V2a` looks redundant and is not. `train.py` passes
+`separate_sh=SPARSE_ADAM_AVAILABLE`, so merely *installing* the accelerated
+rasteriser already changes the SH path before any flag is set. Without `V2a`
+there is no neutral baseline and the gain cannot be attributed. Exposure
+compensation is deliberately left out of this round — see
+[`docs/EXPOSURE.md`](docs/EXPOSURE.md) for why, and for the one-line change that
+enables it without breaking `--eval`.
+
+Cell 5 works out how much RAM the photos need and **stops** if it exceeds
+10.5 GB, saying how many photos would fit instead. Cell 7 patches the 3DGS
+source for the five things that have no command-line flag — `uint8` images,
+a hard Gaussian cap, an anisotropy penalty, per-1000-iteration logging of
+Gaussian count and peak VRAM, and dropping the all-ones `alpha_mask` that the
+October 2024 code keeps for every camera (5.5 GB of RAM at 3200px for 180
+photos, spent on multiplying by one). It keeps a `.bak` and can be re-run safely.
 
 Checkpoints are copied to Drive as they appear, so a dropped session costs you
 nothing already finished.
+
+If you are coming from an older version of this notebook: `LIMIT_VRAM` is gone.
+It doubled `densify_grad_threshold` and cut densification off 3,000 iterations
+early, which is exactly what smears small text into streaks by iteration 30,000.
+It only existed because the training command was missing `--data_device cpu`,
+leaving 7.4 GB of photos sitting on the T4's VRAM. That flag is now always
+passed, and `LIMIT_VRAM` has no reason to exist.
 
 ---
 

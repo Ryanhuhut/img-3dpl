@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Notebook
+.ipynb_checkpoints/
+
+# Kết quả chạy thử — không đưa lên repo, file .ply nặng hàng trăm MB
+*.ply
+*.db
+*.zip
+*.tar.gz

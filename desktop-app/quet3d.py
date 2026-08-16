@@ -3,14 +3,9 @@
 Quét 3D — dựng vị trí camera từ file database đã ghép sẵn trên Google Colab.
 
 Cách làm việc:
-  1. Trên Colab (có GPU T4): tách đặc trưng + ghép ảnh  →  ra file <dự án>.db
-  2. Tải file .db đó về máy
-  3. Mở app này: thả thư mục ảnh và file .db vào, bấm Bắt đầu
-
-Thư mục ảnh phải là đúng thư mục đã đưa lên Colab ở bước 1 — thường là bản đã
-thu nhỏ về 1600px. Thông số camera trong file .db mô tả đúng những tấm ảnh đó;
-đưa ảnh gốc chưa thu nhỏ vào thì tên file vẫn khớp nhưng kích thước thì không,
-và mô hình dựng ra sẽ sai.
+  1. Trên Colab (có GPU T4): tách đặc trưng + ghép ảnh  →  ra file database.db
+  2. Tải database.db về máy
+  3. Mở app này: thả thư mục ảnh và file database.db vào, bấm Bắt đầu
 
 Vì sao chia đôi như vậy: ghép ảnh cần GPU, mà máy này không có card NVIDIA.
 Còn dựng vị trí camera thì GPU không giúp được gì — nó chạy trên CPU, mà máy
@@ -25,13 +20,19 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Gtk, Adw, GLib, Gio, Gdk
 
+import concurrent.futures as cf
 import os
 import re
 import shutil
 import sqlite3
 import subprocess
+import sys
+import tarfile
+import tempfile
 import threading
 import time
+import traceback
+import zipfile
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -43,6 +44,50 @@ TEN_CONTAINER = "quet3d-dang-chay"
 
 DUOI_ANH = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 
+# Những hệ thống tệp không giữ được nhãn SELinux riêng cho từng file.
+#
+# Ổ cắm ngoài và phân vùng dùng chung với Windows hầu hết nằm trong danh sách
+# này. Kernel gán cho cả ổ đúng một nhãn chung (exFAT là "dosfs_t") và không
+# cách nào đổi được. Docker thì đòi nhãn "container_file_t" mới cho container
+# đụng vào, nên mount kiểu thường sẽ bị chặn thẳng: "Permission denied" — dù
+# quyền đọc ghi thông thường của thư mục hoàn toàn bình thường.
+#
+# Gặp ổ như vậy thì phải tắt kiểm soát SELinux cho riêng container này, xem
+# _dung_lenh_docker.
+HE_TEP_KHONG_NHAN = {
+    "exfat", "vfat", "msdos", "ntfs", "ntfs3", "fuseblk", "fuse",
+    "iso9660", "udf", "hfs", "hfsplus", "cifs", "smb3", "nfs", "nfs4",
+}
+
+
+def loai_he_thong_tep(duong: Path) -> str:
+    """
+    Cho biết đường dẫn này nằm trên hệ thống tệp loại gì (ext4, btrfs, exfat…).
+
+    Đọc thẳng /proc/self/mountinfo rồi lấy điểm gắn dài nhất khớp với đường dẫn
+    — điểm gắn dài nhất chính là cái đang thực sự chứa file, vì các ổ gắn lồng
+    nhau đều là con của "/".
+    """
+    try:
+        duong = duong.resolve()
+    except OSError:
+        return ""
+    dai_nhat, loai = -1, ""
+    try:
+        with open("/proc/self/mountinfo", encoding="utf-8") as f:
+            for hang in f:
+                truoc, _, sau = hang.partition(" - ")
+                cot = truoc.split()
+                if len(cot) < 5 or not sau:
+                    continue
+                diem_gan = Path(cot[4])
+                if duong == diem_gan or diem_gan in duong.parents:
+                    if len(str(diem_gan)) > dai_nhat:
+                        dai_nhat, loai = len(str(diem_gan)), sau.split()[0]
+    except OSError:
+        return ""
+    return loai
+
 # Mã chặng, tên hiển thị, tỉ trọng thời gian.
 # Tỉ trọng lấy từ số đo thật trên máy Acer i3 với 320 ảnh:
 # dựng camera 105 phút, các chặng còn lại chưa tới 1 phút mỗi chặng.
@@ -51,6 +96,44 @@ CHANG = [
     ("dung_cam", "Dựng vị trí camera", 105),
     ("kiem_tra", "Kiểm tra kết quả",     1),
     ("nan_meo",  "Nắn méo ảnh",          2),
+    ("nen_zip",  "Nén thành file .zip",  4),
+]
+
+# Những thứ được cho vào file .zip mang đi train. Chỉ hai thư mục này, đúng
+# cấu trúc Gaussian Splatting đòi. Cố tình bỏ "distorted/" ở ngoài: trong đó
+# có bản chép của database.db, nặng hàng GB mà lúc train không đụng tới —
+# nhét vào chỉ tổ ngồi đợi tải lên lâu gấp mấy lần.
+THU_MUC_MANG_DI = ("images", "sparse")
+
+# Thu nhỏ ảnh trước khi mang lên Colab.
+#
+# Cỡ ảnh chọn ở đây đi xuyên suốt cả ba chặng sau: database chặng 1 ghi thông
+# số camera của đúng cỡ này, image_undistorter chặng 2 xuất ra đúng cỡ này, và
+# chặng 3 train ở đúng cỡ này. Muốn train ở 3200px thì phải chọn 3200 NGAY TỪ
+# ĐÂY — thêm cờ ở chặng 3 là vô ích, độ phân giải đã bị khoá từ trước rồi.
+#
+# 1600px là mặc định cũ và vẫn đúng cho hầu hết trường hợp. Chỉ lên 2400 hoặc
+# 3200 khi trong ảnh có chữ nhỏ cần đọc được: chữ cao 20px trên ảnh 3200px chỉ
+# còn 10px khi hạ về 1600px, sát ngưỡng Nyquist, qua JPEG nữa là mất hẳn.
+#
+# Đổi lại: ảnh 3200px nặng gấp bốn, chặng 3 train chậm khoảng ba lần, và RAM
+# của Colab free chỉ chứa nổi chừng 450 tấm ở cỡ đó. Bù lại thì nên chụp ít
+# ảnh hơn — 160 ảnh 3200px về đích nhanh hơn 320 ảnh 1600px mà lại nét hơn,
+# vì số cặp ảnh phải ghép ở chặng 1 giảm bốn lần.
+CO_ANH = [
+    (1600, "1600 px — mặc định, hợp cho cả căn phòng"),
+    (2400, "2400 px — vật thể nhiều gờ cạnh"),
+    (3200, "3200 px — vật thể có chữ nhỏ cần đọc được"),
+]
+
+# Chất lượng 93 là mức mắt thường không thấy khác mà tệp nhẹ đi mấy lần.
+CHAT_LUONG = 93
+
+# Nén .zip thì để nguyên không ép, y như "zip -0" trong script cũ: ảnh JPEG đã
+# nén sẵn trong ruột rồi. .tar.gz buộc phải gzip nên để mức 1 cho nhanh.
+KIEU_NEN = [
+    (".zip",    "Tệp .zip  (mặc định)"),
+    (".tar.gz", "Tệp .tar.gz"),
 ]
 TEN_CHANG = {ma: ten for ma, ten, _ in CHANG}
 TRONG_SO = {ma: ts for ma, _, ts in CHANG}
@@ -136,6 +219,67 @@ CSS = b"""
 """
 
 
+def tieu_cu_35mm(duong: Path):
+    """
+    Đọc tiêu cự quy đổi 35mm ghi trong EXIF của một tấm JPEG.
+
+    Tự đọc lấy chứ không nhờ ImageMagick, vì "magick identify" phải giải mã cả
+    tấm ảnh mới lấy được EXIF — 236 ảnh mất cả phút đồng hồ, còn đọc thẳng thế
+    này chỉ động tới vài KB đầu tệp. (Thử "identify -ping" rồi: nhanh thật
+    nhưng không ra EXIF.)
+
+    Trả về số nguyên, hoặc None nếu ảnh không ghi tiêu cự.
+    """
+    import struct
+
+    try:
+        with open(duong, "rb") as f:
+            if f.read(2) != b"\xff\xd8":            # không phải JPEG
+                return None
+            kho = None
+            while True:
+                dau = f.read(2)
+                if len(dau) < 2 or dau[0] != 0xFF:
+                    return None
+                ma = dau[1]
+                if ma == 0xDA:                      # tới phần ảnh, hết chỗ có EXIF
+                    return None
+                dai = struct.unpack(">H", f.read(2))[0]
+                than = f.read(dai - 2)
+                if ma == 0xE1 and than[:6] == b"Exif\x00\x00":
+                    kho = than[6:]
+                    break
+            if kho is None:
+                return None
+
+        # Bên trong khối Exif là một tệp TIFF thu nhỏ: hai chữ đầu cho biết
+        # đọc số theo chiều nào, rồi tới chỗ bắt đầu của bảng thẻ đầu tiên.
+        chieu = "<" if kho[:2] == b"II" else ">"
+        (goc_ifd,) = struct.unpack_from(chieu + "I", kho, 4)
+
+        def doc_bang(vi_tri, tim):
+            (so_the,) = struct.unpack_from(chieu + "H", kho, vi_tri)
+            for i in range(so_the):
+                o = vi_tri + 2 + i * 12
+                the, kieu = struct.unpack_from(chieu + "HH", kho, o)
+                if the != tim:
+                    continue
+                # Kiểu 3 là số 2 byte, kiểu 4 là số 4 byte — cả hai đều nằm
+                # gọn trong ô giá trị nên đọc thẳng, khỏi đi tìm đâu xa.
+                if kieu == 3:
+                    return struct.unpack_from(chieu + "H", kho, o + 8)[0]
+                if kieu == 4:
+                    return struct.unpack_from(chieu + "I", kho, o + 8)[0]
+            return None
+
+        goc_exif = doc_bang(goc_ifd, 0x8769)        # bảng thẻ EXIF nằm riêng
+        if goc_exif is None:
+            return None
+        return doc_bang(goc_exif, 0xA405)           # FocalLengthIn35mmFilm
+    except (OSError, struct.error, IndexError):
+        return None
+
+
 def dem_anh(thu_muc: Path) -> int:
     """Đếm số file ảnh nằm trực tiếp trong thư mục."""
     try:
@@ -182,6 +326,368 @@ def doc_con_lai(giay: float) -> str:
     return f"còn khoảng {gio:.1f} tiếng".replace(".", ",")
 
 
+class TrangNenAnh(Gtk.Box):
+    """
+    Thu nhỏ ảnh còn 1600px rồi gói lại thành một tệp mang lên Colab.
+
+    Gói PHẲNG: ảnh nằm thẳng ở gốc tệp nén, không có thư mục bọc bên ngoài —
+    giải nén ra là thấy ảnh ngay. Khác với "zip -r" trong script cũ, vốn bọc
+    thêm một lớp thư mục rồi lên Colab lại phải đi tìm.
+
+    Ảnh gốc không bị đụng tới: ảnh thu nhỏ ghi ra thư mục tạm, gói xong thì
+    xoá thư mục tạm đi, chỉ còn lại đúng một tệp nén.
+    """
+
+    def __init__(self, cua):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        self.cua = cua
+        self.dang_chay = False
+        self.bi_huy = False
+        self.dich_tu_dien = ""      # đường dẫn ra do tool tự điền, chưa ai sửa
+        self.canh = CO_ANH[0][0]    # cỡ ảnh của lần nén đang chạy
+
+        cuon = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER,
+                                  vexpand=True)
+        hop = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16,
+                      margin_top=20, margin_bottom=20,
+                      margin_start=24, margin_end=24)
+        cuon.set_child(hop)
+        self.append(cuon)
+
+        loi_nhac = Gtk.Label(
+            label="Thu nhỏ ảnh rồi gói thành một tệp để tải lên Colab cho "
+                  "nhanh. Giải nén ra là ảnh nằm luôn ở ngoài, không có thư "
+                  "mục bọc. Ảnh gốc giữ nguyên.",
+            wrap=True, xalign=0)
+        loi_nhac.add_css_class("nhat")
+        hop.append(loi_nhac)
+
+        nhom = Adw.PreferencesGroup()
+        self.o_nguon = Adw.EntryRow(title="Đường dẫn thư mục ảnh gốc")
+        self.o_nguon.add_suffix(self._nut_duyet(self._chon_nguon))
+        self.o_nguon.connect("changed", self._khi_doi_nguon)
+        nhom.add(self.o_nguon)
+
+        self.o_dich = Adw.EntryRow(title="Đường dẫn tệp nén sẽ tạo ra")
+        self.o_dich.add_suffix(self._nut_duyet(self._chon_dich))
+        nhom.add(self.o_dich)
+
+        # Chọn cỡ ảnh ở đây là chốt luôn cho cả ba chặng sau — xem CO_ANH.
+        self.o_canh = Adw.ComboRow(
+            title="Thu nhỏ cạnh dài về",
+            subtitle="Chọn 3200 nếu cần đọc được chữ nhỏ trên vật thể",
+            model=Gtk.StringList.new([ten for _, ten in CO_ANH]))
+        self.o_canh.connect("notify::selected", self._khi_doi_canh)
+        nhom.add(self.o_canh)
+
+        self.o_kieu = Adw.ComboRow(
+            title="Kiểu nén",
+            model=Gtk.StringList.new([ten for _, ten in KIEU_NEN]))
+        self.o_kieu.connect("notify::selected", self._khi_doi_kieu)
+        nhom.add(self.o_kieu)
+
+        # Bật sẵn, và nên để yên: chặng dựng camera cần đúng bộ ảnh đã thu nhỏ
+        # này chứ không phải ảnh gốc. Tắt đi thì lát nữa phải tự giải nén ra lại.
+        self.o_giu = Adw.SwitchRow(
+            title="Giữ lại thư mục ảnh đã thu nhỏ",
+            subtitle="Bước dựng vị trí camera cần đúng bộ ảnh này",
+            active=True)
+        nhom.add(self.o_giu)
+        hop.append(nhom)
+
+        self.nhan_tt = Gtk.Label(label="", wrap=True, xalign=0, visible=False)
+        self.nhan_tt.add_css_class("nhat")
+        hop.append(self.nhan_tt)
+
+        self.thanh = Gtk.ProgressBar(show_text=True, visible=False)
+        hop.append(self.thanh)
+
+        hop_nut = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10,
+                          halign=Gtk.Align.CENTER, margin_top=4)
+        self.nut_chay = Gtk.Button(label="Bắt đầu nén")
+        self.nut_chay.add_css_class("suggested-action")
+        self.nut_chay.add_css_class("pill")
+        self.nut_chay.connect("clicked", self._bam_bat_dau)
+        hop_nut.append(self.nut_chay)
+        self.nut_huy = Gtk.Button(label="Dừng lại", visible=False)
+        self.nut_huy.add_css_class("destructive-action")
+        self.nut_huy.add_css_class("pill")
+        self.nut_huy.connect("clicked", self._bam_huy)
+        hop_nut.append(self.nut_huy)
+        hop.append(hop_nut)
+
+        if shutil.which("magick") is None:
+            self.nut_chay.set_sensitive(False)
+            self._bao("Máy chưa cài ImageMagick — cần lệnh “magick” để thu nhỏ ảnh")
+
+    def _nut_duyet(self, ham):
+        nut = Gtk.Button(icon_name="folder-open-symbolic",
+                         valign=Gtk.Align.CENTER, tooltip_text="Duyệt…")
+        nut.add_css_class("flat")
+        nut.connect("clicked", ham)
+        return nut
+
+    def _bao(self, chu: str):
+        self.cua._bao(chu)
+
+    # ---------------------------------------------------------- chọn đường dẫn
+    def _chon_nguon(self, *_):
+        hop = Gtk.FileDialog(title="Chọn thư mục ảnh gốc")
+        cu = Path(self.o_nguon.get_text().strip()).expanduser()
+        if cu.is_dir():
+            hop.set_initial_folder(Gio.File.new_for_path(str(cu)))
+        hop.select_folder(self.cua, None, self._nhan_nguon)
+
+    def _nhan_nguon(self, hop, ket_qua):
+        try:
+            tep = hop.select_folder_finish(ket_qua)
+        except GLib.Error:
+            return
+        if tep:
+            self.o_nguon.set_text(tep.get_path())
+
+    def _chon_dich(self, *_):
+        hop = Gtk.FileDialog(title="Lưu tệp nén vào đâu")
+        cu = Path(self.o_dich.get_text().strip()).expanduser()
+        if cu.name:
+            hop.set_initial_name(cu.name)
+        if cu.parent.is_dir():
+            hop.set_initial_folder(Gio.File.new_for_path(str(cu.parent)))
+        hop.save(self.cua, None, self._nhan_dich)
+
+    def _nhan_dich(self, hop, ket_qua):
+        try:
+            tep = hop.save_finish(ket_qua)
+        except GLib.Error:
+            return
+        if tep:
+            self.o_dich.set_text(tep.get_path())
+
+    def _duoi_dang_chon(self) -> str:
+        return KIEU_NEN[self.o_kieu.get_selected()][0]
+
+    def _canh(self) -> int:
+        """Cạnh dài đang chọn, tính bằng pixel."""
+        return CO_ANH[self.o_canh.get_selected()][0]
+
+    def _khi_doi_nguon(self, *_):
+        """Tự điền đường dẫn ra theo tên thư mục ảnh — trừ khi người dùng đã sửa."""
+        o_dich = self.o_dich.get_text().strip()
+        if o_dich and o_dich != self.dich_tu_dien:
+            return
+        nguon = Path(self.o_nguon.get_text().strip()).expanduser()
+        if not nguon.name:
+            return
+        self.dich_tu_dien = str(nguon.parent /
+                                f"{nguon.name}_{self._canh()}{self._duoi_dang_chon()}")
+        self.o_dich.set_text(self.dich_tu_dien)
+
+    def _khi_doi_canh(self, *_):
+        """Đổi cỡ ảnh thì đổi luôn tên tệp ra, để hai bộ khác cỡ không đè nhau."""
+        self._khi_doi_nguon()
+
+    def _khi_doi_kieu(self, *_):
+        """Đổi kiểu nén thì thay luôn phần đuôi của đường dẫn ra."""
+        hien = self.o_dich.get_text().strip()
+        if not hien:
+            return
+        for duoi, _ in KIEU_NEN:
+            if hien.endswith(duoi):
+                hien = hien[:-len(duoi)]
+                break
+        moi = hien + self._duoi_dang_chon()
+        if self.o_dich.get_text().strip() == self.dich_tu_dien:
+            self.dich_tu_dien = moi
+        self.o_dich.set_text(moi)
+
+    # ------------------------------------------------------------------ chạy
+    def _bam_bat_dau(self, *_):
+        nguon = Path(self.o_nguon.get_text().strip()).expanduser()
+        dich = Path(self.o_dich.get_text().strip()).expanduser()
+
+        if not nguon.is_dir():
+            self._bao("Dòng trên chưa trỏ tới một thư mục có thật")
+            return
+        ds = sorted(f for f in nguon.iterdir()
+                    if f.is_file() and f.suffix.lower() in DUOI_ANH)
+        if not ds:
+            self._bao(f"Không thấy ảnh nào trong “{nguon.name}”")
+            return
+        if not dich.name or dich.name.startswith("."):
+            self._bao("Dòng dưới chưa có tên tệp nén")
+            return
+        if not dich.parent.is_dir():
+            self._bao(f"Không có thư mục “{dich.parent}” để lưu vào")
+            return
+        if not os.access(dich.parent, os.W_OK):
+            self._bao(f"Không có quyền ghi vào “{dich.parent}”")
+            return
+        if dich.exists():
+            self._hoi_ghi_de(nguon, dich, ds)
+            return
+        self._chay(nguon, dich, ds)
+
+    def _hoi_ghi_de(self, nguon, dich, ds):
+        hop = Adw.AlertDialog(
+            heading="Đã có tệp này rồi",
+            body=f"“{dich.name}” đang tồn tại. Nén tiếp là đè lên bản cũ.")
+        hop.add_response("khong", "Thôi")
+        hop.add_response("co", "Đè lên")
+        hop.set_response_appearance("co", Adw.ResponseAppearance.DESTRUCTIVE)
+        hop.set_default_response("khong")
+        hop.connect("response",
+                    lambda _d, r: self._chay(nguon, dich, ds) if r == "co" else None)
+        hop.present(self.cua)
+
+    def _chay(self, nguon, dich, ds):
+        self.dang_chay, self.bi_huy = True, False
+        # Chốt cỡ ảnh ngay tại đây, khi còn đang ở luồng giao diện. Luồng nén
+        # chạy nền không được phép đọc trạng thái widget.
+        self.canh = self._canh()
+        # Khoá nút quay lại: đang nén dở mà bỏ đi trang khác thì lát nữa quay
+        # vào chẳng biết nó chạy tới đâu. Muốn thoát thì bấm "Dừng lại".
+        self.cua.nut_quay_lai.set_sensitive(False)
+        self.nut_chay.set_visible(False)
+        self.nut_huy.set_visible(True)
+        self.nut_huy.set_sensitive(True)
+        for o in (self.o_nguon, self.o_dich, self.o_kieu, self.o_canh):
+            o.set_sensitive(False)
+        self.nhan_tt.set_visible(True)
+        self.thanh.set_visible(True)
+        self._dat_tien_do(0, len(ds), "đang xem tiêu cự EXIF…")
+        threading.Thread(target=self._luong, args=(nguon, dich, ds),
+                         daemon=True).start()
+
+    def _bam_huy(self, *_):
+        self.bi_huy = True
+        self.nut_huy.set_sensitive(False)
+        self.nut_huy.set_label("Đang dừng…")
+
+    def _dat_tien_do(self, xong: int, tong: int, chu: str):
+        self.thanh.set_fraction(xong / tong if tong else 0)
+        self.thanh.set_text(f"{xong} / {tong} ảnh")
+        self.nhan_tt.set_label(chu)
+        return False
+
+    def _xem_tieu_cu(self, ds):
+        """
+        Đếm xem cả bộ ảnh có chung một tiêu cự không, giống script cũ.
+
+        Lẫn ảnh chụp bằng nhiều mức zoom khác nhau là COLMAP dựng ra mô hình
+        cong vênh, mà tới lúc ấy đã mất mấy tiếng rồi. Biết trước vẫn hơn.
+        """
+        return {str(t) for f in ds if (t := tieu_cu_35mm(f)) is not None}
+
+    def _thu_nho(self, vao: Path, ra: Path):
+        """Thu nhỏ một tấm. Trả về lời báo lỗi, hoặc None nếu êm xuôi."""
+        if self.bi_huy:
+            return None
+        try:
+            kq = subprocess.run(
+                ["magick", str(vao), "-resize", f"{self.canh}x{self.canh}",
+                 "-quality", str(CHAT_LUONG), str(ra)],
+                capture_output=True, text=True,
+                # Mỗi tấm để ImageMagick chạy một luồng thôi, vì ta đã cho chạy
+                # nhiều tấm cùng lúc rồi — không thì 4 nhân giành nhau, chậm hơn.
+                env={**os.environ, "MAGICK_THREAD_LIMIT": "1"})
+        except OSError as e:
+            return f"{vao.name}: {e}"
+        if kq.returncode != 0:
+            return f"{vao.name}: {kq.stderr.strip().splitlines()[-1:] or ''}"
+        return None
+
+    def _don_rac_cu(self, cho: Path):
+        """
+        Dọn thư mục tạm mà lần chạy trước bỏ lại.
+
+        Nén xong là tự xoá, nên chỉ khi app bị giết ngang (mất điện, tắt máy)
+        mới còn sót. Phải quá hai tiếng không ai sờ tới mới dám dọn, phòng
+        trường hợp có cửa sổ khác đang nén dở vào cùng chỗ.
+        """
+        gio = time.time()
+        for d in cho.glob(".nen-anh-*"):
+            try:
+                if d.is_dir() and gio - d.stat().st_mtime > 7200:
+                    shutil.rmtree(d, ignore_errors=True)
+            except OSError:
+                pass
+
+    def _luong(self, nguon: Path, dich: Path, ds):
+        tong = len(ds)
+        self._don_rac_cu(dich.parent)
+        tam = Path(tempfile.mkdtemp(prefix=".nen-anh-", dir=dich.parent))
+        try:
+            muc = self._xem_tieu_cu(ds)
+            if muc and len(muc) > 1:
+                GLib.idle_add(
+                    self._bao, f"Ảnh có {len(muc)} mức tiêu cự khác nhau "
+                               f"({', '.join(sorted(muc))}) — COLMAP dễ dựng lệch")
+
+            xong, loi = 0, []
+            with cf.ThreadPoolExecutor(max_workers=os.cpu_count() or 2) as bom:
+                viec = [bom.submit(self._thu_nho, f, tam / f.name) for f in ds]
+                for v in cf.as_completed(viec):
+                    if self.bi_huy:
+                        bom.shutdown(cancel_futures=True)
+                        break
+                    if (e := v.result()):
+                        loi.append(e)
+                    xong += 1
+                    GLib.idle_add(self._dat_tien_do, xong, tong,
+                                  f"đang thu nhỏ còn {self.canh}px…")
+            if self.bi_huy:
+                raise InterruptedError
+
+            GLib.idle_add(self._dat_tien_do, tong, tong,
+                          f"đang gói vào {dich.name}…")
+            self._goi(tam, dich)
+        except InterruptedError:
+            GLib.idle_add(self._xong, dich, None, "Đã dừng giữa chừng")
+            return
+        except Exception as e:                                    # noqa: BLE001
+            GLib.idle_add(self._xong, dich, None, str(e))
+            return
+        finally:
+            shutil.rmtree(tam, ignore_errors=True)
+        GLib.idle_add(self._xong, dich, loi, None)
+
+    def _goi(self, tam: Path, dich: Path):
+        """Gói phẳng: mỗi ảnh vào tệp nén bằng đúng cái tên của nó, không kèm lối."""
+        ds = sorted(f for f in tam.iterdir() if f.is_file())
+        cho = dich.with_name(dich.name + ".dang-ghi")
+        if dich.name.endswith(".tar.gz"):
+            with tarfile.open(cho, "w:gz", compresslevel=1) as t:
+                for f in ds:
+                    t.add(f, arcname=f.name)
+        else:
+            with zipfile.ZipFile(cho, "w", zipfile.ZIP_STORED) as z:
+                for f in ds:
+                    z.write(f, f.name)
+        cho.replace(dich)
+
+    def _xong(self, dich: Path, loi, hong: str | None):
+        self.dang_chay = False
+        self.cua.nut_quay_lai.set_sensitive(True)
+        self.nut_huy.set_visible(False)
+        self.nut_huy.set_label("Dừng lại")
+        self.nut_chay.set_visible(True)
+        for o in (self.o_nguon, self.o_dich, self.o_kieu, self.o_canh):
+            o.set_sensitive(True)
+        self.thanh.set_visible(False)
+
+        if hong:
+            self.nhan_tt.set_label(f"Không xong: {hong}")
+            self._bao(f"Không xong: {hong}")
+            return
+        cd = dich.stat().st_size / 1e6 if dich.is_file() else 0
+        chu = f"Xong: {dich.name} · {cd:.0f} MB"
+        if loi:
+            chu += f" · {len(loi)} ảnh lỗi bị bỏ qua"
+        self.nhan_tt.set_label(chu + f"\n{dich}")
+        self._bao(chu)
+        return False
+
+
 class CuaSo(Adw.ApplicationWindow):
 
     def __init__(self, app):
@@ -189,16 +695,21 @@ class CuaSo(Adw.ApplicationWindow):
         self.set_default_size(800, 800)
 
         self.app = app
-        self.thu_muc_anh: Path | None = None
+        self.thu_muc_goc: Path | None = None    # thư mục người dùng thả vào
+        self.thu_muc_anh: Path | None = None    # thư mục thật sự chứa ảnh
+        self.thu_muc_dich: Path | None = None   # nơi lưu do người dùng chọn
         self.thu_muc_ra: Path | None = None
+        self.file_zip: Path | None = None
         self.file_db: Path | None = None
         self.so_anh = 0
         self.so_anh_db = 0
 
         self.dang_chay = False
+        self.dang_nen = False
         self.bi_huy = False
         self.tien_trinh: subprocess.Popen | None = None
         self.luc_bat_dau = 0.0
+        self.luc_co_tin = 0.0
         self.luc_bat_dau_chang = 0.0
         self.chang_hien_tai: str | None = None
         self.phan_tram_chang = 0.0
@@ -211,15 +722,56 @@ class CuaSo(Adw.ApplicationWindow):
 
         khung = Adw.ToolbarView()
         self.header = Adw.HeaderBar()
+        self.tieu_de = Adw.WindowTitle(title="Quét 3D")
+        self.header.set_title_widget(self.tieu_de)
+
+        self.nut_nen_anh = Gtk.Button(label="Nén ảnh")
+        self.nut_nen_anh.add_css_class("pill")
+        self.nut_nen_anh.add_css_class("flat")
+        self.nut_nen_anh.set_tooltip_text(
+            "Thu nhỏ ảnh rồi gói lại thành một tệp để tải lên Colab")
+        self.nut_nen_anh.connect("clicked", lambda *_: self._sang_trang("nen"))
+        self.header.pack_start(self.nut_nen_anh)
+
+        # Bấm nhầm vào nút nén thì quay ra ngay, khỏi phải tắt app mở lại.
+        self.nut_quay_lai = Gtk.Button(icon_name="go-previous-symbolic",
+                                       tooltip_text="Quay lại", visible=False)
+        self.nut_quay_lai.add_css_class("flat")
+        self.nut_quay_lai.connect("clicked", lambda *_: self._sang_trang("cho"))
+        self.header.pack_start(self.nut_quay_lai)
+
         khung.add_top_bar(self.header)
-        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
+        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
         khung.set_content(self.stack)
         self.toast.set_child(khung)
 
         self.stack.add_named(self._trang_cho(), "cho")
+        self.trang_nen = TrangNenAnh(self)
+        self.stack.add_named(self.trang_nen, "nen")
         self.stack.add_named(self._trang_chay(), "chay")
 
+        # Bấm Escape hay nút "quay lại" trên chuột cũng ra được, như mọi app khác
+        phim = Gtk.EventControllerKey()
+        phim.connect("key-pressed", self._khi_bam_phim)
+        self.add_controller(phim)
+
         self.connect("close-request", self._khi_dong_cua_so)
+
+    def _sang_trang(self, ten: str):
+        """Đổi trang và sửa lại thanh tiêu đề cho khớp."""
+        self.stack.set_visible_child_name(ten)
+        self.nut_nen_anh.set_visible(ten == "cho")
+        self.nut_quay_lai.set_visible(ten == "nen")
+        self.tieu_de.set_title("Nén ảnh cho Colab" if ten == "nen"
+                               else "Quét 3D")
+
+    def _khi_bam_phim(self, _bo, phim, _ma, _trang_thai):
+        if (phim == Gdk.KEY_Escape
+                and self.stack.get_visible_child_name() == "nen"
+                and self.nut_quay_lai.get_sensitive()):
+            self._sang_trang("cho")
+            return True
+        return False
 
     # --------------------------------------------------------- trang lúc chờ
     def _trang_cho(self):
@@ -264,6 +816,10 @@ class CuaSo(Adw.ApplicationWindow):
         nut_db.add_css_class("pill")
         nut_db.connect("clicked", self._mo_chon_db)
         hop_nut.append(nut_db)
+        nut_dich = Gtk.Button(label="Chọn nơi lưu…")
+        nut_dich.add_css_class("pill")
+        nut_dich.connect("clicked", self._mo_chon_dich)
+        hop_nut.append(nut_dich)
         self.vung_tha.append(hop_nut)
 
         # Kéo thả: GTK4 trả về danh sách file qua Gdk.FileList
@@ -282,8 +838,13 @@ class CuaSo(Adw.ApplicationWindow):
                                      subtitle="chưa chọn")
         self.hang_db.add_prefix(
             Gtk.Image.new_from_icon_name("drive-harddisk-symbolic"))
-        self.hang_ra = Adw.ActionRow(title="Kết quả sẽ ghi vào", subtitle="—")
+        # Bấm thẳng vào hàng này cũng đổi được nơi lưu, khỏi phải mò lên nút.
+        self.hang_ra = Adw.ActionRow(title="File mang đi train", subtitle="—")
         self.hang_ra.add_prefix(Gtk.Image.new_from_icon_name("folder-symbolic"))
+        self.hang_ra.add_suffix(
+            Gtk.Image.new_from_icon_name("document-edit-symbolic"))
+        self.hang_ra.set_activatable(True)
+        self.hang_ra.connect("activated", self._mo_chon_dich)
         for h in (self.hang_anh, self.hang_db, self.hang_ra):
             self.nhom_tt.add(h)
         hop.append(self.nhom_tt)
@@ -344,6 +905,66 @@ class CuaSo(Adw.ApplicationWindow):
         if tep:
             self._dat_db(Path(tep.get_path()))
 
+    def _mo_chon_dich(self, *_):
+        hop = Gtk.FileDialog(title="Chọn nơi lưu file .zip và thư mục kết quả")
+        bat_dau = self.thu_muc_dich or (
+            self.thu_muc_goc.parent if self.thu_muc_goc else None)
+        if bat_dau and bat_dau.is_dir():
+            hop.set_initial_folder(Gio.File.new_for_path(str(bat_dau)))
+        hop.select_folder(self, None, self._nhan_dich)
+
+    def _nhan_dich(self, hop, ket_qua):
+        try:
+            tep = hop.select_folder_finish(ket_qua)
+        except GLib.Error:
+            return
+        if tep:
+            self._dat_dich(Path(tep.get_path()))
+
+    def _dat_dich(self, duong: Path):
+        if not os.access(duong, os.W_OK):
+            self._bao(f"Không có quyền ghi vào “{duong.name}”")
+            return
+
+        # Cấm chọn đích nằm trong thư mục ảnh. Thư mục ảnh được gắn vào
+        # container ở chế độ chỉ đọc, nên COLMAP sẽ không ghi nổi một chữ vào
+        # đó — mà lỗi ấy phải hai tiếng sau mới lòi ra.
+        if self.thu_muc_anh and (duong == self.thu_muc_anh
+                                 or self.thu_muc_anh in duong.parents):
+            self._bao("Không lưu vào bên trong thư mục ảnh được — "
+                      "thư mục đó chỉ được đọc, không được ghi")
+            return
+
+        self.thu_muc_dich = duong
+        if self.thu_muc_goc is None:
+            self.hang_ra.set_subtitle(f"{duong}\n(chờ chọn thư mục ảnh)")
+        else:
+            self._tinh_duong_ra()
+        self._nhac_neu_thieu_cho(duong)
+        self._cap_nhat_san_sang()
+
+    def _nhac_neu_thieu_cho(self, dich: Path):
+        """
+        Nhắc trước nếu ổ đích sắp hết chỗ.
+
+        Chỗ cần dùng khoảng gấp đôi cỡ bộ ảnh: một lần cho ảnh đã nắn méo, một
+        lần nữa cho file .zip — cộng thêm bản chép của database. Thà biết ngay
+        bây giờ còn hơn chạy hai tiếng rồi chết vì đầy ổ.
+        """
+        if self.thu_muc_anh is None:
+            return
+        try:
+            co_anh = sum(f.stat().st_size for f in self.thu_muc_anh.iterdir()
+                         if f.is_file() and f.suffix.lower() in DUOI_ANH)
+            co_db = self.file_db.stat().st_size if self.file_db else 0
+            con_trong = shutil.disk_usage(dich).free
+        except OSError:
+            return
+        can = co_anh * 2 + co_db
+        if con_trong < can:
+            self._bao(f"Ổ này chỉ còn {con_trong / 1e9:.1f} GB, "
+                      f"mà cần khoảng {can / 1e9:.1f} GB")
+
     def _khi_tha(self, _dt, gia_tri, _x, _y):
         """Thả gì cũng nhận: thư mục thì coi là ảnh, file .db thì coi là database."""
         self.vung_tha.remove_css_class("vung-tha-active")
@@ -369,20 +990,49 @@ class CuaSo(Adw.ApplicationWindow):
           - thư mục chứa ảnh trực tiếp
           - thư mục dự án đã có sẵn thư mục con "input"
         """
-        if (duong / "input").is_dir() and dem_anh(duong / "input") > 0:
-            anh, ra = duong / "input", duong
-        else:
-            anh, ra = duong, duong.parent / f"{duong.name}_3d"
+        anh = (duong / "input"
+               if (duong / "input").is_dir() and dem_anh(duong / "input") > 0
+               else duong)
 
         n = dem_anh(anh)
         if n == 0:
             self._bao(f"Không thấy ảnh nào trong “{anh.name}”")
             return
 
-        self.thu_muc_anh, self.thu_muc_ra, self.so_anh = anh, ra, n
+        self.thu_muc_goc, self.thu_muc_anh, self.so_anh = duong, anh, n
         self.hang_anh.set_subtitle(f"{anh}   ({n} ảnh)")
-        self.hang_ra.set_subtitle(str(ra))
+        self._tinh_duong_ra()
         self._cap_nhat_san_sang()
+
+    def _tinh_duong_ra(self):
+        """
+        Chốt xem kết quả sẽ nằm ở đâu.
+
+        File .zip luôn mang đúng tên thư mục người dùng thả vào. Thư mục kết
+        quả thì phải thêm đuôi "_3d", vì nó nằm cùng chỗ với thư mục ảnh —
+        trùng tên là ghi đè lên ảnh gốc.
+        """
+        if self.thu_muc_goc is None:
+            return
+        ten = self.thu_muc_goc.name
+
+        if self.thu_muc_dich is not None:
+            noi = self.thu_muc_dich
+            ra = noi / f"{ten}_3d"
+        elif self.thu_muc_anh != self.thu_muc_goc:
+            # Thư mục dự án đã có sẵn thư mục con "input": ghi thẳng vào đó,
+            # đúng cấu trúc mà Gaussian Splatting quen dùng.
+            noi, ra = self.thu_muc_goc.parent, self.thu_muc_goc
+        else:
+            noi = self.thu_muc_goc.parent
+            ra = noi / f"{ten}_3d"
+
+        self.thu_muc_ra = ra
+        self.file_zip = noi / f"{ten}.zip"
+        self.hang_ra.set_subtitle(
+            f"{self.file_zip}\n(thư mục kèm theo: {ra})"
+            + ("" if self.thu_muc_dich is not None
+               else "\nbấm vào đây để đổi nơi lưu"))
 
     def _dat_db(self, duong: Path):
         thong_tin = doc_database(duong)
@@ -402,6 +1052,17 @@ class CuaSo(Adw.ApplicationWindow):
         """Bật nút Bắt đầu khi đủ đầu vào, và cảnh báo nếu hai bên không khớp."""
         co_anh = self.thu_muc_anh is not None
         co_db = self.file_db is not None
+
+        # Nơi lưu chọn trước, thư mục ảnh thả sau, và hoá ra nơi lưu nằm lọt
+        # trong thư mục ảnh — lúc chọn chưa biết được nên phải rà lại ở đây.
+        if (co_anh and self.thu_muc_ra
+                and self.thu_muc_anh in self.thu_muc_ra.parents):
+            self.hang_uoc_luong.set_title("Nơi lưu nằm trong thư mục ảnh")
+            self.hang_uoc_luong.set_subtitle(
+                "Thư mục ảnh chỉ được đọc nên không ghi kết quả vào đó được. "
+                "Bấm “Chọn nơi lưu…” để chỉ sang chỗ khác.")
+            self.nut_bat_dau.set_sensitive(False)
+            return
 
         if co_anh and co_db and self.so_anh != self.so_anh_db:
             # Đây là cái bẫy dễ vấp nhất: lấy nhầm database của bộ ảnh khác.
@@ -485,6 +1146,14 @@ class CuaSo(Adw.ApplicationWindow):
         hop_chang.append(self.nhan_chang)
         self.thanh_chang = Gtk.ProgressBar(show_text=True)
         hop_chang.append(self.thanh_chang)
+
+        # Bằng chứng còn sống. COLMAP có những quãng im lặng dài (nắn chùm tia),
+        # lúc ấy thanh tiến độ đứng yên và trông y hệt như treo. Dòng này nói rõ
+        # container còn chạy hay không, để khỏi phải đoán qua mức dùng CPU.
+        self.nhan_song = Gtk.Label(label="", halign=Gtk.Align.START, wrap=True)
+        self.nhan_song.add_css_class("caption")
+        self.nhan_song.add_css_class("nhat")
+        hop_chang.append(self.nhan_song)
         hop.append(hop_chang)
 
         self.nhom_chang = Adw.PreferencesGroup(margin_top=6)
@@ -534,8 +1203,10 @@ class CuaSo(Adw.ApplicationWindow):
             return
 
         self.dang_chay = True
+        self.dang_nen = False
         self.bi_huy = False
         self.luc_bat_dau = time.monotonic()
+        self.luc_co_tin = self.luc_bat_dau
         self.chang_hien_tai = None
         self.phan_tram_chang = 0.0
         self.trong_so_da_qua = 0
@@ -552,32 +1223,92 @@ class CuaSo(Adw.ApplicationWindow):
         self.thanh_chang.set_fraction(0)
         self.thanh_chang.set_text("")
         self.nhan_con_lai.set_label("đang tính…")
+        self.nhan_song.set_label("đang khởi động container…")
 
-        self.stack.set_visible_child_name("chay")
-        self.header.set_show_title_buttons(False)
+        self._sang_trang("chay")
+        self._an_nut_tieu_de(True)
 
-        # Chặn máy tự ngủ hoặc tự treo giữa chừng — đúng tinh thần "đừng tắt máy"
-        self.khoa_ngu = self.app.inhibit(
-            self,
-            Gtk.ApplicationInhibitFlags.SUSPEND |
-            Gtk.ApplicationInhibitFlags.IDLE |
-            Gtk.ApplicationInhibitFlags.LOGOUT,
-            "Đang dựng mô hình 3D")
+        # Từ đây trở đi màn hình đã nói "ĐỪNG TẮT MÁY". Nếu có bất cứ trục trặc
+        # nào mà ta để lọt, người dùng sẽ ngồi canh một màn hình đứng yên hàng
+        # tiếng đồng hồ trong khi thật ra chẳng có gì chạy cả. Nên phải tự tay
+        # bắt lỗi ở đây: hỏng thì quay về trang chờ và nói thẳng ra hỏng vì sao.
+        try:
+            # Chặn máy tự ngủ hoặc tự treo giữa chừng — đúng tinh thần
+            # "đừng tắt máy". Không khoá được thì vẫn chạy tiếp, chỉ ghi lại.
+            try:
+                self.khoa_ngu = self.app.inhibit(
+                    self,
+                    Gtk.ApplicationInhibitFlags.SUSPEND |
+                    Gtk.ApplicationInhibitFlags.IDLE |
+                    Gtk.ApplicationInhibitFlags.LOGOUT,
+                    "Đang dựng mô hình 3D")
+            except Exception as e:                                # noqa: BLE001
+                self.khoa_ngu = None
+                self._ghi_log(f"(không khoá được chế độ ngủ: {e})")
 
-        self.id_dong_ho = GLib.timeout_add_seconds(1, self._nhip_dong_ho)
-        threading.Thread(target=self._chay_nen, daemon=True).start()
+            self.id_dong_ho = GLib.timeout_add_seconds(1, self._nhip_dong_ho)
+            threading.Thread(target=self._chay_nen, daemon=True).start()
+        except Exception as e:                                    # noqa: BLE001
+            self._ket_thuc(1, f"không khởi động được: {e}")
 
-    def _chay_nen(self):
-        lenh = [
+    def _an_nut_tieu_de(self, an: bool):
+        """
+        Ẩn/hiện nút thu nhỏ - phóng to - đóng trên thanh tiêu đề.
+
+        Adw.HeaderBar KHÔNG có set_show_title_buttons() như Gtk.HeaderBar —
+        nó tách làm hai đầu. Gọi nhầm tên là ném AttributeError giữa chừng.
+        """
+        self.header.set_show_start_title_buttons(not an)
+        self.header.set_show_end_title_buttons(not an)
+        # Đang dựng mô hình mà bấm nén ảnh nữa thì bốn nhân chia đôi, cả hai
+        # việc cùng chậm — giấu nút đi cho khỏi lỡ tay.
+        self.nut_nen_anh.set_visible(not an)
+
+    def _dung_lenh_docker(self):
+        """
+        Dựng lệnh docker, liệu cơm gắp mắm theo loại ổ đang dùng.
+
+        Bình thường mỗi mount gắn thêm chữ "z" để docker dán nhãn SELinux cho
+        thư mục, nhờ vậy container đụng vào được mà máy vẫn giữ nguyên hàng rào
+        bảo vệ. Nhưng ổ exFAT/NTFS không giữ nổi nhãn, dán cũng như không, và
+        container sẽ bị chặn ngay ở bước đọc thư mục.
+
+        Gặp trường hợp đó thì bỏ chữ "z" đi và tắt hàng rào SELinux cho riêng
+        lần chạy này. Đây là cách duy nhất ngoài việc chép hàng chục GB ảnh
+        sang ổ trong rồi chép ngược lại.
+        """
+        cho_gan = [GOI_COLMAP.parent, self.thu_muc_anh,
+                   self.file_db, self.thu_muc_ra]
+        kho_tinh = [d for d in cho_gan
+                    if loai_he_thong_tep(d) in HE_TEP_KHONG_NHAN]
+
+        if kho_tinh:
+            # ",z" đi kèm ":ro", còn ":z" đứng một mình khi mount đọc-ghi
+            chi_doc, doc_ghi, them = ":ro", "", ["--security-opt",
+                                                 "label=disable"]
+            ten_o = ", ".join(sorted({loai_he_thong_tep(d) for d in kho_tinh}))
+            GLib.idle_add(
+                self._ghi_log,
+                f"(ổ định dạng {ten_o} không giữ được nhãn SELinux — "
+                f"tắt kiểm soát SELinux cho riêng container này)")
+        else:
+            chi_doc, doc_ghi, them = ":ro,z", ":z", []
+
+        return [
             "docker", "run", "--rm", "-i", "--name", TEN_CONTAINER,
+            *them,
             "-e", f"HOST_UID={os.getuid()}",
             "-e", f"HOST_GID={os.getgid()}",
-            "-v", f"{GOI_COLMAP.parent}:/pkg:ro,z",
-            "-v", f"{self.thu_muc_anh}:/in:ro,z",
-            "-v", f"{self.file_db}:/db/database.db:ro,z",
-            "-v", f"{self.thu_muc_ra}:/out:z",
+            "-v", f"{GOI_COLMAP.parent}:/pkg{chi_doc}",
+            "-v", f"{self.thu_muc_anh}:/in{chi_doc}",
+            "-v", f"{self.file_db}:/db/database.db{chi_doc}",
+            "-v", f"{self.thu_muc_ra}:/out{doc_ghi}",
             IMAGE_DOCKER, "bash", "-s",
         ]
+
+    def _chay_nen(self):
+        lenh = self._dung_lenh_docker()
+        GLib.idle_add(self._ghi_log, "$ " + " ".join(lenh))
         try:
             self.tien_trinh = subprocess.Popen(
                 lenh, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -590,7 +1321,7 @@ class CuaSo(Adw.ApplicationWindow):
         except Exception as e:                                    # noqa: BLE001
             GLib.idle_add(self._ket_thuc, 1, str(e))
             return
-        GLib.idle_add(self._ket_thuc, ma, None)
+        GLib.idle_add(self._xong_container, ma)
 
     # Các mẫu chữ COLMAP in ra, lấy thẳng từ mã nguồn COLMAP 3.13.0:
     #   incremental_pipeline.cc : "Registering image #%d (num_reg_frames=%d)"
@@ -598,7 +1329,8 @@ class CuaSo(Adw.ApplicationWindow):
     RE_DUNG_CAM = re.compile(r"num_reg_frames=(\d+)")
     RE_CAP = re.compile(r"\[(\d+)\s*/\s*(\d+)\]")
 
-    def _dong_moi(self, dong: str):
+    def _ghi_log(self, dong: str):
+        """Thêm một dòng vào nhật ký chi tiết. Chỉ gọi từ luồng giao diện."""
         bo = self.o_log.get_buffer()
         bo.insert(bo.get_end_iter(), dong + "\n")
         if bo.get_line_count() > 3000:          # cắt bớt cho khỏi phình bộ nhớ
@@ -606,6 +1338,11 @@ class CuaSo(Adw.ApplicationWindow):
         # Dùng scroll_to_iter chứ không tạo mark mới. Tạo mark cho từng dòng sẽ
         # để lại hàng chục nghìn mark trong bộ nhớ sau vài tiếng chạy.
         self.o_log.scroll_to_iter(bo.get_end_iter(), 0, False, 0, 0)
+        return False
+
+    def _dong_moi(self, dong: str):
+        self._ghi_log(dong)
+        self.luc_co_tin = time.monotonic()
 
         if dong.startswith("##CHANG:"):
             self._sang_chang(dong.split(":", 1)[1])
@@ -680,8 +1417,26 @@ class CuaSo(Adw.ApplicationWindow):
     def _nhip_dong_ho(self):
         if not self.dang_chay:
             return False
-        self.nhan_dong_ho.set_label(
-            doc_thoi_gian(time.monotonic() - self.luc_bat_dau))
+        gio = time.monotonic()
+        self.nhan_dong_ho.set_label(doc_thoi_gian(gio - self.luc_bat_dau))
+
+        # Báo container còn sống hay không. Đây là chỗ duy nhất trả lời được
+        # câu "nó có đang chạy thật không, hay chỉ đứng hình?" mà không bắt
+        # người dùng đi mở trình theo dõi tài nguyên để đoán qua mức CPU.
+        tt = self.tien_trinh
+        if self.dang_nen:
+            self.nhan_song.set_label(
+                "container xong rồi · đang gói file .zip, đừng đụng vào thư mục")
+        elif tt is None:
+            self.nhan_song.set_label("đang khởi động container…")
+        elif tt.poll() is not None:
+            self.nhan_song.set_label("container đã dừng — đang thu dọn…")
+        else:
+            im = gio - self.luc_co_tin
+            self.nhan_song.set_label(
+                f"container đang chạy · tin mới nhất {doc_thoi_gian(im)} trước"
+                + ("  (COLMAP hay im lặng lâu ở khúc nắn chùm tia — bình thường)"
+                   if im > 120 else ""))
         return True
 
     # -------------------------------------------------------------------- huỷ
@@ -703,18 +1458,93 @@ class CuaSo(Adw.ApplicationWindow):
         subprocess.run(["docker", "kill", TEN_CONTAINER],
                        capture_output=True, check=False)
 
+    # ------------------------------------------------------------------- nén
+    def _xong_container(self, ma: int):
+        """
+        Container đã đóng. Chạy trót lọt thì nén tiếp, còn không thì dừng luôn.
+
+        Nén ở đây chứ không nén trong container, vì trong container không có
+        sẵn lệnh zip, mà cài thêm thì phải tải gói về giữa chừng.
+        """
+        if ma != 0 or self.bi_huy:
+            self._ket_thuc(ma, None)
+            return False
+        if not (self.thu_muc_ra / "sparse/0").is_dir():
+            # Không có sparse/0 thì chẳng có gì đáng mang đi train. Vẫn coi là
+            # xong để hộp thoại nói rõ chuyện này ra.
+            self._ket_thuc(0, None)
+            return False
+
+        self.dang_nen = True
+        self._sang_chang("nen_zip")
+        self.nhan_chang.set_label("Nén thành file .zip để mang đi train")
+        threading.Thread(target=self._luong_nen_zip, daemon=True).start()
+        return False
+
+    def _luong_nen_zip(self):
+        """Gói images/ và sparse/ thành một file .zip duy nhất."""
+        goc = self.thu_muc_ra
+        ds = [f for ten in THU_MUC_MANG_DI
+              for f in sorted((goc / ten).rglob("*")) if f.is_file()]
+        tong_byte = sum(f.stat().st_size for f in ds) or 1
+
+        # Ghi ra tên tạm rồi mới đổi tên. Huỷ giữa chừng hay mất điện sẽ để lại
+        # file .dang-ghi thấy rõ là dở dang, chứ không phải một file .zip trông
+        # như đã xong mà thật ra thiếu mất nửa số ảnh.
+        tam = self.file_zip.with_name(self.file_zip.name + ".dang-ghi")
+        ten_trong_zip = self.file_zip.stem
+        da_byte, lan_bao = 0, 0.0
+        try:
+            with zipfile.ZipFile(tam, "w", zipfile.ZIP_DEFLATED,
+                                 compresslevel=6) as zf:
+                for f in ds:
+                    if self.bi_huy:
+                        raise InterruptedError
+                    # Ảnh JPEG/PNG đã nén sẵn trong ruột rồi, ép nén lần nữa chỉ
+                    # tốn thêm hàng chục phút CPU mà tệp chẳng nhỏ đi được mấy.
+                    kieu = (zipfile.ZIP_STORED if f.suffix.lower() in DUOI_ANH
+                            else zipfile.ZIP_DEFLATED)
+                    zf.write(f, f"{ten_trong_zip}/{f.relative_to(goc)}",
+                             compress_type=kieu)
+                    da_byte += f.stat().st_size
+                    gio = time.monotonic()
+                    if gio - lan_bao > 0.3:          # đừng dội quá nhiều vào GUI
+                        lan_bao = gio
+                        GLib.idle_add(self._tien_do_nen, da_byte, tong_byte)
+        except InterruptedError:
+            tam.unlink(missing_ok=True)
+            GLib.idle_add(self._ket_thuc, 1, None)
+            return
+        except Exception as e:                                    # noqa: BLE001
+            tam.unlink(missing_ok=True)
+            GLib.idle_add(self._ket_thuc, 1, f"nén thất bại: {e}")
+            return
+
+        try:
+            tam.replace(self.file_zip)
+        except OSError as e:
+            GLib.idle_add(self._ket_thuc, 1, f"không đổi tên được file zip: {e}")
+            return
+        GLib.idle_add(self._ket_thuc, 0, None)
+
+    def _tien_do_nen(self, da: int, tong: int):
+        self._dat_tien_do_chang(da / tong, f"{da / 1e9:.1f} / {tong / 1e9:.1f} GB")
+        return False
+
     # --------------------------------------------------------------- kết thúc
     def _ket_thuc(self, ma: int, loi: str | None):
         self.dang_chay = False
+        self.dang_nen = False
         if self.id_dong_ho:
             GLib.source_remove(self.id_dong_ho)
             self.id_dong_ho = None
         if self.khoa_ngu:
             self.app.uninhibit(self.khoa_ngu)
             self.khoa_ngu = None
+        self.tien_trinh = None
 
-        self.header.set_show_title_buttons(True)
-        self.stack.set_visible_child_name("cho")
+        self._an_nut_tieu_de(False)
+        self._sang_trang("cho")
         self.nut_huy.set_sensitive(True)
         self.nut_huy.set_label("Huỷ bỏ")
 
@@ -728,13 +1558,17 @@ class CuaSo(Adw.ApplicationWindow):
                       + (f": {loi}" if loi else ""))
 
     def _hop_xong(self, tong: str):
-        co_sparse = (self.thu_muc_ra / "sparse/0").is_dir()
-        hop = Adw.AlertDialog(
-            heading="Xong rồi",
-            body=f"Mất {tong}.\n\nKết quả nằm ở:\n{self.thu_muc_ra}\n\n"
-                 + ("Thư mục sparse/0 và images/ đã sẵn sàng cho Gaussian Splatting."
-                    if co_sparse
-                    else "Nhưng không thấy thư mục sparse/0 — xem lại nhật ký."))
+        if self.file_zip.is_file():
+            cd = self.file_zip.stat().st_size / 1e9
+            than = (f"Mất {tong}.\n\nFile mang đi train:\n{self.file_zip}"
+                    f"   ({cd:.1f} GB)\n\n"
+                    "Đẩy nguyên file này lên là train được — bên trong đã có "
+                    "images/ và sparse/0 đúng cấu trúc Gaussian Splatting.")
+        else:
+            than = (f"Mất {tong}.\n\nKết quả nằm ở:\n{self.thu_muc_ra}\n\n"
+                    "Nhưng không thấy thư mục sparse/0 nên chưa nén được — "
+                    "xem lại nhật ký.")
+        hop = Adw.AlertDialog(heading="Xong rồi", body=than)
         hop.add_response("dong", "Đóng")
         hop.add_response("mo", "Mở thư mục")
         hop.set_default_response("mo")
@@ -742,11 +1576,25 @@ class CuaSo(Adw.ApplicationWindow):
         hop.present(self)
 
     def _tra_loi_xong(self, _hop, tra_loi):
-        if tra_loi == "mo":
-            Gio.AppInfo.launch_default_for_uri(
-                Gio.File.new_for_path(str(self.thu_muc_ra)).get_uri(), None)
+        if tra_loi != "mo":
+            return
+        # Mở thư mục chứa file .zip, chứ không mở thư mục kết quả: thứ người
+        # dùng cần cầm đi lúc này là cái file zip. Chỉ khi chưa nén được mới
+        # quay về cách cũ.
+        if self.file_zip.is_file():
+            try:
+                Gio.AppInfo.launch_default_for_uri(
+                    Gio.File.new_for_path(str(self.file_zip.parent)).get_uri(),
+                    None)
+                return
+            except GLib.Error:
+                pass
+        Gio.AppInfo.launch_default_for_uri(
+            Gio.File.new_for_path(str(self.thu_muc_ra)).get_uri(), None)
 
     def _khi_dong_cua_so(self, *_):
+        if self.trang_nen.dang_chay:
+            self.trang_nen.bi_huy = True     # dừng nén rồi hẵng đóng
         if not self.dang_chay:
             return False
         hop = Adw.AlertDialog(
@@ -767,8 +1615,24 @@ class Ung(Adw.Application):
     def __init__(self):
         super().__init__(application_id="io.github.ryanhuhut.quet3d")
 
+    def _loi_lot_luoi(self, kieu, gia_tri, vet):
+        """
+        Lưới an toàn cuối cùng.
+
+        Khi một hàm phản hồi của GTK ném lỗi, PyGObject chỉ in vết lỗi ra stderr
+        rồi chạy tiếp như không có chuyện gì. Mở app từ menu thì stderr đổ vào
+        journald — người dùng không thấy gì hết, chỉ thấy giao diện đứng im.
+        Chính kiểu lỗi đó đã làm màn hình "ĐỪNG TẮT MÁY" hiện ra mà bên dưới
+        không có gì chạy. Nên bắt lại và nói ra màn hình.
+        """
+        traceback.print_exception(kieu, gia_tri, vet)     # vẫn ghi vào journal
+        cua = self.props.active_window
+        if cua is not None:
+            GLib.idle_add(cua._bao, f"Lỗi trong tool — {kieu.__name__}: {gia_tri}")
+
     def do_startup(self):
         Adw.Application.do_startup(self)
+        sys.excepthook = self._loi_lot_luoi
         nha_cc = Gtk.CssProvider()
         nha_cc.load_from_data(CSS)
         Gtk.StyleContext.add_provider_for_display(
@@ -781,5 +1645,4 @@ class Ung(Adw.Application):
 
 
 if __name__ == "__main__":
-    import sys
     sys.exit(Ung().run(sys.argv))
