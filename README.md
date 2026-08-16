@@ -57,13 +57,13 @@ registering images is inherently sequential: each new photo depends on the ones
 already placed. Free-tier Colab gives you 2 CPU cores. Most laptops have more.
 
 ```
- photos at 1600px ──►  [1] Colab GPU     ──►  Meo_1600.db
+ photos at 3200px ──►  [1] Colab GPU     ──►  Meo_3200.db
       as .zip               match pairs
 
-    Meo_1600.db   ──►  [2] desktop app   ──►  Meo_1600_3d/
+    Meo_3200.db   ──►  [2] desktop app   ──►  Meo_3200_3d/
  + those same photos      camera positions      images/ + sparse/0/
 
-  Meo_1600_3d/    ──►  [3] Colab GPU     ──►  Meo_1600.ply
+  Meo_3200_3d/    ──►  [3] Colab GPU     ──►  Meo_3200.ply
       as .zip               train 3DGS
 ```
 
@@ -101,7 +101,7 @@ people lose an afternoon:
 | 2 | Feeding the app the **original** photos | Give it the **shrunk folder**, the one you uploaded. Same file names, different pixels; nothing errors, the model just comes out wrong |
 | 0 → 1 | Unzipping by hand, or reshaping the zip | Neither notebook cares. They find the photos, and `images/` + `sparse/0/`, at any depth inside the archive |
 
-And name each scan. The database is saved as `Meo_1600.db`, not `database.db`,
+And name each scan. The database is saved as `Meo_3200.db`, not `database.db`,
 so two projects cannot end up as two identical file names in one downloads
 folder.
 
@@ -117,30 +117,71 @@ that follows: the stage-1 database records camera parameters for exactly these
 pixels, stage 2 undistorts to exactly this size, and stage 3 trains at exactly
 this size. Adding a flag in stage 3 cannot undo a choice made here.
 
-| size | use it for | cost |
-|---|---|---|
-| **1600px** | objects with no fine print — the old default | fastest everywhere |
-| **2400px** | objects with a lot of edge detail | |
-| **3200px** | objects with small text you need to be able to read | 4x the pixels, ~3x the stage-3 training time, and Colab's free-tier RAM only holds about 450 photos at this size |
+Pick by what you photographed, not by a pixel count. The preset names are the
+same ones stage 3 uses, so the choice carries through:
+
+| preset | size | use it for | cost |
+|---|---|---|---|
+| **`FLAT_OBJECT`** | **3200px** — the default | objects with small text you need to be able to read | 4x the pixels, ~3x the stage-3 training time, and Colab's free-tier RAM only holds about 450 photos at this size |
+| **`COMPLEX_OBJECT`** | **2400px** | objects with a lot of edge detail and little text | |
+| **`ENTIRE_ROOM`** | **1600px** | a whole room — the old default for everything | fastest everywhere |
 
 Text 20px tall in a 3200px photo is only 10px tall at 1600px — right at the
 Nyquist limit, and after JPEG at quality 93 it is essentially gone. That is a
-stage-0 loss; no training parameter recovers it.
+stage-0 loss; no training parameter recovers it. This is why 1600px is no
+longer the default: it was never wrong for shape, only for text, and text is
+what people usually come here for.
 
-Shoot fewer photos when you go bigger: 160 photos at 3200px finish sooner than
-320 at 1600px *and* come out sharper, because stage 1 matches a quarter as many
-pairs (12,720 instead of 51,040).
+3200px is a real ceiling, not a round number. COLMAP downsizes to
+`max_image_size` (3200 by default) for feature detection and then scales the
+keypoint coordinates back up, so anything above 3200px costs upload time and
+buys no extra features.
+
+Shoot fewer photos when you go bigger: 180 photos at 3200px finish sooner than
+320 at 1600px *and* come out sharper, because stage 1 matches a third as many
+pairs (16,110 instead of 51,040). 180 photos around an object is one every two
+degrees — well past the 5-10 degrees reconstruction actually needs.
+
+#### Blur scoring, and dropping photos without losing the orbit
+
+Every photo is scored with the **variance of its Laplacian** — the classic
+measure for camera shake and missed focus, since the Laplacian is a second
+derivative and only spikes at edges. A sharp photo is full of edges and scores
+high; a blurred one has been smoothed and scores low. On one test image: sharp
+3212, mild blur (Gaussian 1.2px) 37.9, heavy blur (3px) 2.3.
+
+The app prints the distribution as a histogram, which answers the question worth
+answering before you spend three hours in stage 2: *is the whole set soft, or
+just a few frames?* A soft set means going back and reshooting; a few soft
+frames means dropping those frames. The score is only meaningful **relative to
+other photos of the same subject** — a page of text scores higher than a smooth
+ceramic bowl no matter how well either was shot.
+
+Reduction to the preset's target count then works like this: the list is split
+into exactly that many consecutive, equal spans, and the sharpest photo in each
+span is kept.
+
+**Never take the first N of the list.** File names run in shutter order, so the
+second half of the list is the second half of the orbit — truncating it removes
+one whole side of the object and COLMAP reconstructs half a model. Splitting into
+spans keeps the coverage identical and drops the shaky frames for free; at half
+the original count it is exactly "keep the sharper one of each pair".
 
 The desktop app does this for you — the **Nén ảnh** button on the main screen
-resizes, checks EXIF, and packs the result in one go. The script below is the
-same thing by hand.
+picks the size from the preset, resizes, checks EXIF, scores every photo for
+blur, optionally thins the set, and packs the result in one go. The script below
+is the same thing by hand, minus the blur scoring.
 
-Needs ImageMagick 7 (`magick`). Edit the three lines at the top, paste the rest:
+Needs ImageMagick 7 (`magick`). Edit the four lines at the top, paste the rest.
+`SIZE` is the one number that matters — set it from the table above, and note
+that it also names the destination folder so two runs at different sizes cannot
+overwrite each other:
 
 ```bash
 # ==================== EDIT THIS ====================
+SIZE=3200                               # 3200 FLAT_OBJECT / 2400 COMPLEX_OBJECT / 1600 ENTIRE_ROOM
 SRC="/home/you/Downloads/Cap-GB"        # folder of original photos
-DST="/home/you/quet3d/Cap-GB_1600"      # destination — name it after the scan
+DST="/home/you/quet3d/Cap-GB_$SIZE"     # destination — name it after the scan
 EXT="jpg"                               # extension: jpg / jpeg / png
 # ===================================================
 
@@ -151,8 +192,8 @@ echo "--- EXIF focal length (must print ONE row only):"
 magick identify -format "%[EXIF:FocalLengthIn35mmFilm] " *.$EXT 2>/dev/null | tr ' ' '\n' | sort | uniq -c
 
 mkdir -p "$DST"
-echo "--- Shrinking, this takes a few minutes..."
-magick mogrify -path "$DST" -resize 1600x1600 -quality 93 *.$EXT
+echo "--- Shrinking to ${SIZE}px, this takes a few minutes..."
+magick mogrify -path "$DST" -resize "${SIZE}x${SIZE}" -quality 93 *.$EXT
 
 echo "--- DONE: $(ls "$DST" | wc -l) photos, $(du -sh "$DST" | cut -f1)"
 ```
@@ -166,7 +207,8 @@ Then pack the shrunk folder into a zip:
 
 ```bash
 # ==================== EDIT THIS ====================
-DST="/home/you/quet3d/Cap-GB_1600"    # same folder as above
+SIZE=3200                             # same number as above
+DST="/home/you/quet3d/Cap-GB_$SIZE"   # same folder as above
 # ===================================================
 
 cd "$(dirname "$DST")" || exit 1
@@ -187,7 +229,7 @@ in Colab, set the runtime to **T4 GPU**, edit the configuration cell, run all
 cells. Nothing needs unzipping by hand — the notebook does that, and finds the
 photos whether they sit at the top of the zip or inside a folder.
 
-You get `Cap-GB_1600.db` on your Drive, named after your zip rather than the
+You get `Cap-GB_3200.db` on your Drive, named after your zip rather than the
 `database.db` every tutorial produces. That matters the moment you have two
 scans: two files called `database.db` in one downloads folder is how the wrong
 one gets fed to stage 2, and you learn about it two hours later.
@@ -229,16 +271,43 @@ warning so nobody shuts the machine down mid-run. It also blocks the system from
 suspending while it works.
 
 **The photo folder must be the shrunk one you uploaded, not the originals.** The
-file names are identical either way, so nothing complains — but the camera
-parameters inside the `.db` describe the shrunk images, and handing COLMAP a
-different size produces a reconstruction that is wrong rather than one that
-fails. Keep that folder around; do not delete it after uploading the zip.
+file names are identical either way, and the camera parameters inside the `.db`
+are recorded in the pixels of the images you matched — hand COLMAP a different
+size and `image_undistorter` runs to completion and writes a model that is
+simply wrong. Keep that folder around; do not delete it after uploading the zip.
 
-This holds at any size, not just 1600px: if stage 0 was run at 3200px, this
-stage needs the 3200px folder.
+The app now checks this rather than trusting you to read this paragraph. It
+reads `width`/`height` from the `cameras` table of the `.db`, reads the real
+pixel dimensions of the photos in the folder you picked, and if the two do not
+overlap it **prints both numbers and refuses to start**:
 
-Output lands next to the photo folder as `<folder>_3d/`, so `Cap-GB_1600/`
-gives you `Cap-GB_1600_3d/`.
+```
+Ảnh không đúng cỡ ghi trong database
+database ghi 1200×1600, còn thư mục ảnh là 2400×3200.
+```
+
+There is no way to reconcile those two numbers after the fact.
+
+#### A `.db` and a `sparse/` cannot be reused at a different size
+
+If you already have `PROJECT.db` and a `sparse/` folder built from 1600px
+photos, **none of it survives the move to 3200px.** Not the database, not the
+sparse model, not the undistorted output.
+
+The reason is the same one that makes the check above necessary: a camera in
+COLMAP is described by a focal length and a principal point measured **in
+pixels**. `1200x1600` with `f=1400px` and `3200x2400` with `f=1400px` are two
+different cameras — the second is an extreme wide angle. Nothing rescales those
+numbers for you, and rescaling them by hand would still leave keypoint
+coordinates, matches and triangulated points describing the old pixel grid.
+
+So changing the stage-0 size means starting over from **stage 1**: shrink again,
+zip again, match again, and rebuild camera positions. Stages 1 and 2 together are
+most of the wall-clock time in this pipeline, which is exactly why stage 0 asks
+you to pick the size before anything else rather than after.
+
+Output lands next to the photo folder as `<folder>_3d/`, so `Cap-GB_3200/`
+gives you `Cap-GB_3200_3d/`.
 
 Requires GTK4 and libadwaita, which ship with any current GNOME desktop
 (`python3-gobject gtk4 libadwaita`). The interface is in Vietnamese.

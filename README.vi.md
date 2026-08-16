@@ -57,13 +57,13 @@ khâu định vị từng ảnh thì tuần tự về bản chất: ảnh mới 
 thường có nhiều hơn.
 
 ```
- ảnh đã về 1600px ──►  [1] GPU Colab     ──►  Meo_1600.db
+ ảnh đã về 3200px ──►  [1] GPU Colab     ──►  Meo_3200.db
        dạng .zip            ghép các cặp
 
-    Meo_1600.db   ──►  [2] app máy tính  ──►  Meo_1600_3d/
+    Meo_3200.db   ──►  [2] app máy tính  ──►  Meo_3200_3d/
    + đúng ảnh đó           dựng camera          images/ + sparse/0/
 
-   Meo_1600_3d/   ──►  [3] GPU Colab     ──►  Meo_1600.ply
+   Meo_3200_3d/   ──►  [3] GPU Colab     ──►  Meo_3200.ply
        dạng .zip            huấn luyện
 ```
 
@@ -100,7 +100,7 @@ toi cả buổi chiều:
 | 2 | Thả **ảnh gốc** vào app | Phải thả **thư mục ảnh đã thu nhỏ**, đúng cái đã đưa lên Colab. Tên file y hệt nhau nên không có lỗi nào báo cả, chỉ có mô hình dựng ra là sai |
 | 0 → 1 | Tự giải nén, hoặc sắp lại zip cho "đúng chuẩn" | Không cần. Cả hai notebook tự tìm ảnh, và tự tìm `images/` + `sparse/0/`, nằm sâu mấy tầng cũng ra |
 
-Và đặt tên cho từng dự án. File database được lưu thành `Meo_1600.db` chứ không
+Và đặt tên cho từng dự án. File database được lưu thành `Meo_3200.db` chứ không
 phải `database.db`, để hai dự án không bao giờ biến thành hai file trùng tên nằm
 chung một thư mục Downloads.
 
@@ -115,30 +115,68 @@ phần còn lại: database chặng 1 ghi thông số camera của đúng cỡ n
 méo ra đúng cỡ này, chặng 3 train ở đúng cỡ này. Thêm cờ ở chặng 3 không gỡ lại
 được quyết định đã chốt ở đây.
 
-| cỡ | dùng khi | cái giá |
-|---|---|---|
-| **1600px** | vật thể không có chữ nhỏ — mặc định cũ | nhanh nhất ở mọi chặng |
-| **2400px** | vật thể nhiều gờ cạnh | |
-| **3200px** | vật thể có chữ nhỏ cần đọc được | gấp bốn số điểm ảnh, chặng 3 chậm khoảng ba lần, và RAM Colab free chỉ chứa nổi chừng 450 tấm ở cỡ này |
+Chọn theo thứ mình chụp, đừng chọn theo số điểm ảnh. Tên preset ở đây đúng bằng
+tên dùng ở chặng 3, nên chọn một lần là đi suốt:
+
+| preset | cỡ | dùng khi | cái giá |
+|---|---|---|---|
+| **`FLAT_OBJECT`** | **3200px** — mặc định | vật thể có chữ nhỏ cần đọc được | gấp bốn số điểm ảnh, chặng 3 chậm khoảng ba lần, và RAM Colab free chỉ chứa nổi chừng 450 tấm ở cỡ này |
+| **`COMPLEX_OBJECT`** | **2400px** | vật thể nhiều gờ cạnh, ít chữ | |
+| **`ENTIRE_ROOM`** | **1600px** | cả căn phòng — mặc định cũ của mọi trường hợp | nhanh nhất ở mọi chặng |
 
 Chữ cao 20px trên ảnh 3200px hạ về 1600px chỉ còn 10px — sát ngưỡng Nyquist, và
 qua JPEG chất lượng 93 nữa thì gần như không còn gì. Mất ở chặng 0 thì không
-tham số train nào lấy lại được.
+tham số train nào lấy lại được. Đó là lý do 1600px thôi làm mặc định: nó chưa
+bao giờ sai về hình khối, chỉ sai về chữ — mà chữ mới là thứ người ta tìm tới
+đây để làm.
 
-Lên cỡ lớn thì nên chụp ít ảnh đi: 160 ảnh 3200px về đích nhanh hơn 320 ảnh
-1600px mà lại nét hơn, vì chặng 1 chỉ phải ghép một phần tư số cặp (12.720 thay
-vì 51.040).
+3200px là cái trần có thật chứ không phải con số cho tròn: COLMAP tự hạ ảnh
+xuống `max_image_size` (mặc định 3200) để dò đặc trưng rồi mới nhân toạ độ
+keypoint trở lại cỡ gốc. Ảnh to hơn 3200px là tốn công tải lên mà không thêm
+được đặc trưng nào.
 
-App máy tính làm sẵn việc này — nút **Nén ảnh** ở màn hình chính vừa thu nhỏ,
-vừa kiểm tra EXIF, vừa gói lại thành một tệp. Đoạn script dưới đây là làm tay
-đúng ngần ấy việc.
+Lên cỡ lớn thì nên chụp ít ảnh đi: 180 ảnh 3200px về đích nhanh hơn 320 ảnh
+1600px mà lại nét hơn, vì chặng 1 chỉ phải ghép một phần ba số cặp (16.110 thay
+vì 51.040). 180 tấm quanh một vật thể là mỗi tấm cách nhau 2 độ — dư thừa so với
+mức 5-10 độ mà việc dựng hình thật sự cần.
 
-Cần ImageMagick 7 (lệnh `magick`). Sửa ba dòng đầu, phần còn lại dán nguyên:
+#### Chấm điểm độ nét, và bớt ảnh mà không thủng vòng quét
+
+Mỗi tấm được chấm điểm bằng **phương sai Laplacian** — cách kinh điển để bắt
+ảnh rung tay hoặc lạc nét, vì Laplacian là đạo hàm bậc hai, nó chỉ nảy lên ở
+chỗ có biên. Ảnh nét đầy biên nên điểm cao; ảnh mờ đã bị làm nhẵn nên điểm
+thấp. Đo thử trên cùng một tấm: nét 3212, mờ nhẹ (Gauss 1,2px) 37,9, mờ nặng
+(3px) 2,3.
+
+App vẽ luôn biểu đồ phân bố, để trả lời cái câu đáng biết trước khi ngồi chờ ba
+tiếng ở chặng 2: *cả bộ mờ đều, hay chỉ vài tấm mờ?* Cả bộ mờ thì phải đi chụp
+lại; vài tấm mờ thì bỏ mấy tấm đó là xong. Con số này **chỉ có nghĩa khi so với
+nhau trong cùng một bộ ảnh** — chụp trang sách đầy chữ thì tấm nào cũng điểm cao
+hơn hẳn chụp một cái bát sứ nhẵn, dù cả hai đều chụp khéo như nhau.
+
+Phần giảm số ảnh về mức của preset làm thế này: chia danh sách thành đúng ngần
+ấy khoảng liền nhau, đều nhau, rồi mỗi khoảng giữ lại tấm nét nhất.
+
+**Tuyệt đối không lấy N tấm đầu danh sách.** Tên tệp chạy theo thứ tự bấm máy,
+nên nửa sau danh sách chính là nửa sau vòng quét — cắt đuôi là mất hẳn một bên
+vật thể, và COLMAP sẽ dựng ra đúng một nửa mô hình. Chia khoảng thì độ phủ giữ
+y nguyên mà lại loại được tấm rung tay không mất gì thêm; khi giảm còn một nửa,
+nó đúng là "mỗi cặp giữ tấm nét hơn".
+
+App máy tính làm sẵn việc này — nút **Nén ảnh** ở màn hình chính tự lấy cỡ ảnh
+theo preset, thu nhỏ, kiểm tra EXIF, chấm điểm độ nét, bớt ảnh nếu bạn muốn, rồi
+gói lại thành một tệp. Đoạn script dưới đây là làm tay đúng ngần ấy việc, trừ
+phần chấm điểm độ nét.
+
+Cần ImageMagick 7 (lệnh `magick`). Sửa bốn dòng đầu, phần còn lại dán nguyên.
+`CANH` là con số duy nhất đáng bận tâm — lấy theo bảng bên trên, và nó đặt luôn
+tên thư mục đích để hai lần chạy khác cỡ không đè lên nhau:
 
 ```bash
 # ==================== SUA O DAY ====================
+CANH=3200                                        # 3200 FLAT_OBJECT / 2400 COMPLEX_OBJECT / 1600 ENTIRE_ROOM
 NGUON="/home/ryanhuhut/Downloads/Cap-GB"        # thu muc anh goc — doi khi quet vat khac
-DICH="/home/ryanhuhut/quet3d/Cap-GB_1600"       # thu muc dich — nen dat theo ten du an
+DICH="/home/ryanhuhut/quet3d/Cap-GB_$CANH"      # thu muc dich — nen dat theo ten du an
 DUOI="jpg"                                       # duoi anh: jpg / jpeg / png
 # ===================================================
 
@@ -149,8 +187,8 @@ echo "--- Tieu cu EXIF (phai ra MOT dong duy nhat):"
 magick identify -format "%[EXIF:FocalLengthIn35mmFilm] " *.$DUOI 2>/dev/null | tr ' ' '\n' | sort | uniq -c
 
 mkdir -p "$DICH"
-echo "--- Dang thu nho, doi vai phut..."
-magick mogrify -path "$DICH" -resize 1600x1600 -quality 93 *.$DUOI
+echo "--- Dang thu nho ve ${CANH}px, doi vai phut..."
+magick mogrify -path "$DICH" -resize "${CANH}x${CANH}" -quality 93 *.$DUOI
 
 echo "--- XONG: $(ls "$DICH" | wc -l) anh, $(du -sh "$DICH" | cut -f1)"
 ```
@@ -164,7 +202,8 @@ Xong thì đóng gói thư mục vừa nén:
 
 ```bash
 # ==================== SUA O DAY ====================
-DICH="/home/ryanhuhut/quet3d/Cap-GB_1600"    # thu muc anh da thu nho — dung ten o lenh truoc
+CANH=3200                                    # dung con so o lenh truoc
+DICH="/home/ryanhuhut/quet3d/Cap-GB_$CANH"   # thu muc anh da thu nho — dung ten o lenh truoc
 # ===================================================
 
 cd "$(dirname "$DICH")" || exit 1
@@ -185,7 +224,7 @@ bằng Colab, chọn `Runtime` → `Change runtime type` → **T4 GPU**, sửa �
 rồi chạy hết. Không phải tự giải nén gì cả — notebook tự làm, và tự tìm ra ảnh
 dù chúng nằm ngay tầng gốc của zip hay nằm trong thư mục con.
 
-Kết quả là file `Cap-GB_1600.db` nằm trên Drive, đặt tên theo file zip của bạn
+Kết quả là file `Cap-GB_3200.db` nằm trên Drive, đặt tên theo file zip của bạn
 chứ không phải `database.db` như mọi hướng dẫn khác. Chuyện tên gọi này thành
 quan trọng ngay khi bạn có dự án thứ hai: hai file cùng tên `database.db` nằm
 chung thư mục Downloads chính là cách file sai lọt vào chặng 2, và hai tiếng sau
@@ -228,16 +267,43 @@ bảng cảnh báo đỏ to đùng để không ai lỡ tay tắt máy giữa ch
 tự ngủ trong lúc làm việc.
 
 **Thư mục ảnh phải là đúng thư mục đã thu nhỏ và đưa lên Colab, không phải ảnh
-gốc.** Tên file hai bên y hệt nhau nên chẳng có lỗi nào báo cả — nhưng thông số
-camera nằm trong file `.db` mô tả đúng những tấm đã thu nhỏ ấy, đưa ảnh cỡ khác
-vào thì COLMAP không chết, nó chỉ dựng ra một mô hình sai. Nhớ giữ thư mục đó
-lại, đừng xoá sau khi đã đóng zip đưa lên Drive.
+gốc.** Tên file hai bên y hệt nhau, mà thông số camera trong file `.db` thì ghi
+theo điểm ảnh của chính bộ ảnh đã ghép — đưa ảnh cỡ khác vào thì
+`image_undistorter` chạy hết, xuất ra model đàng hoàng, chỉ có điều model đó
+sai. Nhớ giữ thư mục đó lại, đừng xoá sau khi đã đóng zip đưa lên Drive.
 
-Chuyện này đúng với mọi cỡ ảnh, không riêng 1600px: chặng 0 chọn 3200px thì
-chặng này phải nhận đúng thư mục 3200px.
+Bây giờ app tự kiểm tra chuyện này chứ không trông vào việc bạn có đọc đoạn văn
+trên hay không. Nó đọc `width`/`height` trong bảng `cameras` của file `.db`, đọc
+cỡ thật của ảnh trong thư mục bạn chọn, và nếu hai bên không có cỡ nào chung thì
+**in ra cả hai con số rồi không cho bấm Bắt đầu**:
 
-Kết quả nằm cạnh thư mục ảnh, tên là `<tên thư mục>_3d/` — `Cap-GB_1600/` sẽ cho
-ra `Cap-GB_1600_3d/`.
+```
+Ảnh không đúng cỡ ghi trong database
+database ghi 1200×1600, còn thư mục ảnh là 2400×3200.
+```
+
+Tới lúc đó thì hai con số ấy không còn cách nào dung hoà được nữa.
+
+#### File `.db` và thư mục `sparse/` không dùng lại được ở cỡ ảnh khác
+
+Nếu bạn đã có sẵn `PROJECT.db` và thư mục `sparse/` dựng từ ảnh 1600px thì
+**chuyển sang 3200px là không giữ lại được thứ gì cả.** Không giữ được database,
+không giữ được mô hình thưa, không giữ được cả phần ảnh đã nắn méo.
+
+Lý do đúng bằng lý do phải có phép kiểm tra bên trên: trong COLMAP, một camera
+được tả bằng tiêu cự và tâm quang học tính **theo điểm ảnh**. `1200×1600` với
+`f=1400px` và `3200×2400` với `f=1400px` là hai cái camera khác hẳn nhau — cái
+sau là ống góc siêu rộng. Không có chỗ nào tự nhân tỉ lệ mấy con số đó lên hộ
+bạn, mà có ngồi nhân tay thì toạ độ keypoint, các cặp đã ghép và các điểm đã
+tam giác hoá vẫn đang tả cái lưới điểm ảnh cũ.
+
+Nên đổi cỡ ảnh ở chặng 0 nghĩa là làm lại từ **chặng 1**: thu nhỏ lại, đóng zip
+lại, ghép lại, rồi dựng lại vị trí camera. Chặng 1 với chặng 2 cộng lại đã là
+gần hết thời gian của cả quy trình — chính vì vậy chặng 0 bắt chọn cỡ ảnh trước
+tiên chứ không để chọn sau.
+
+Kết quả nằm cạnh thư mục ảnh, tên là `<tên thư mục>_3d/` — `Cap-GB_3200/` sẽ cho
+ra `Cap-GB_3200_3d/`.
 
 Cần GTK4 và libadwaita — hai thứ có sẵn trên mọi bản GNOME hiện hành
 (`python3-gobject gtk4 libadwaita`).

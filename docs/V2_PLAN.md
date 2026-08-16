@@ -201,6 +201,8 @@ Model **bắt buộc** giải thích bốn dòng này, vì chúng ngược với
 
 **Chặng 0** — sửa `-resize 1600x1600` thành `-resize 3200x3200` cho chế độ OBJECT. Giữ `-quality 93`. Giữ nguyên bước kiểm tra EXIF một dòng — nó đang đúng và quan trọng.
 
+> **[ĐÃ LÀM — nhánh `v2-chang0-resolution`, nhưng không đúng như viết ở trên]** Không thay hằng số này bằng hằng số khác. Cỡ ảnh thành một biến duy nhất suy ra từ preset — `FLAT_OBJECT` 3200, `COMPLEX_OBJECT` 2400, `ENTIRE_ROOM` 1600 — khớp đúng bảng `PRESETS[...]["pipeline"]["resize_px"]` ở notebook Chặng 3. Đổi 1600 cứng thành 3200 cứng thì chế độ phòng lại sai, và sai theo kiểu chết vì hết RAM giữa buổi train. Xem `PRESET_ANH` trong `desktop-app/quet3d.py`.
+
 **Chặng 1** — không phải sửa gì, nhưng phải hiểu rõ hai điều:
 - COLMAP hạ ảnh xuống `max_image_size` (mặc định 3200) **chỉ để dò đặc trưng**, rồi **nhân toạ độ keypoint trở lại kích thước gốc**. Kích thước và thông số nội tại ghi trong database là của ảnh gốc. Vì vậy nạp ảnh 3200px là điểm ngọt: không bị hạ, mà cũng không phí.
 - Số đặc trưng bị chặn bởi `max_num_features` (mặc định 8192) **chứ không phải bởi độ phân giải**. Nên thời gian ghép cặp **gần như không đổi** khi lên 3200px. Cái tăng chỉ là thời gian upload.
@@ -208,6 +210,8 @@ Model **bắt buộc** giải thích bốn dòng này, vì chúng ngược với
 **[CẢNH BÁO tên tham số]** README của chính repo đã ghi: COLMAP 3.13 đổi `--SiftExtraction.use_gpu` thành `--FeatureExtraction.use_gpu`. Rất có thể **cả họ `SiftExtraction.*` đã đổi thành `FeatureExtraction.*`**. Model **không được đoán** tên `max_num_features` hay `max_image_size` — phải yêu cầu chạy `colmap feature_extractor -h | grep -i "max_"` và đọc kết quả thật.
 
 **Chặng 2** — không phải sửa code, nhưng cảnh báo trong README phải cập nhật: thư mục ảnh đưa cho app bây giờ là thư mục **3200px**, không phải 1600px. Cảnh báo hiện tại của repo ("phải là thư mục 1600px") sẽ trở thành sai và gây hỏng model trong im lặng — đúng cái bẫy mà repo đang cố cảnh báo.
+
+> **[ĐÃ LÀM — nhánh `v2-chang0-resolution`, và có sửa code]** Đổi 1600 thành 3200 trong lời cảnh báo là chỉ dời cái bẫy sang lần đổi cỡ sau. Thay bằng phép đo thật: app đọc `width`/`height` trong bảng `cameras` của `.db`, đọc cỡ thật của ảnh trong thư mục người dùng chọn, hai bên không có cỡ nào chung thì in cả hai con số rồi **không cho bấm Bắt đầu**. Kiểm tra cũ chỉ so *số lượng* ảnh, mà hai bộ khác cỡ thì số lượng vẫn bằng nhau — đúng trường hợp hay gặp nhất.
 
 **Chặng 3** — thêm `-r 1`. Không có nó, mọi thứ trên bị 3DGS âm thầm vứt bỏ.
 
@@ -611,10 +615,10 @@ Chi phí chuyển thấp hơn tưởng: gsplat đọc thẳng định dạng COL
 
 ## A.4. Những việc nhỏ hơn
 
-- Đưa `resize` và kiểm tra EXIF của Chặng 0 vào app GTK4 — hiện đang là đoạn bash chép tay trong README, và là chỗ dễ sai nhất.
+- ~~Đưa `resize` và kiểm tra EXIF của Chặng 0 vào app GTK4~~ — **xong**, `TrangNenAnh` trong `desktop-app/quet3d.py`. Đoạn bash trong README vẫn còn, nhưng giờ nhận biến `CANH`/`SIZE` ở đầu chứ không ghi cứng 1600.
 - Ô 8 mới: gọi `splat-transform` xuất `.sog`/`.ksplat`.
 - Ô đo lường: chạy `render.py` + `metrics.py`, in bảng PSNR/SSIM.
-- Cập nhật README: mục "Gaussian Splatting is happy at 1600px" và cảnh báo "phải là thư mục 1600px" ở Chặng 2 đều cần viết lại theo chế độ.
+- ~~Cập nhật README: mục "Gaussian Splatting is happy at 1600px" và cảnh báo "phải là thư mục 1600px" ở Chặng 2~~ — **xong**, và cảnh báo Chặng 2 không viết lại theo chế độ mà bỏ hẳn con số: app đọc `width`/`height` trong bảng `cameras` của `.db`, so với cỡ thật của ảnh, lệch thì chặn. Cảnh báo ghi cứng một con số thì đằng nào cũng có ngày nói dối.
 - Rebuild COLMAP với `CUDA_ARCH="75;80;89"` để chạy được cả L4 và A100 — mã đã có sẵn trong `build-colmap/`, chỉ đổi một biến.
 
 ---

@@ -112,19 +112,71 @@ THU_MUC_MANG_DI = ("images", "sparse")
 # chặng 3 train ở đúng cỡ này. Muốn train ở 3200px thì phải chọn 3200 NGAY TỪ
 # ĐÂY — thêm cờ ở chặng 3 là vô ích, độ phân giải đã bị khoá từ trước rồi.
 #
-# 1600px là mặc định cũ và vẫn đúng cho hầu hết trường hợp. Chỉ lên 2400 hoặc
-# 3200 khi trong ảnh có chữ nhỏ cần đọc được: chữ cao 20px trên ảnh 3200px chỉ
-# còn 10px khi hạ về 1600px, sát ngưỡng Nyquist, qua JPEG nữa là mất hẳn.
+# Vì sao cỡ ảnh KHÔNG phải một hằng số: mỗi loại cảnh có một cỡ đúng riêng, và
+# một con số cứng thì loại nào cũng sai một nửa. Bảng dưới đây là bản sao của
+# PRESETS[...]["pipeline"]["resize_px"] trong notebook chặng 3 — sửa một bên
+# thì phải sửa bên kia, không thì ảnh chụp một cỡ mà train một cỡ khác.
+#
+#   FLAT_OBJECT     3200  chữ cao 20px trên ảnh 3200px hạ về 1600px chỉ còn
+#                         10px, sát ngưỡng Nyquist, qua JPEG nữa là mất hẳn.
+#   COMPLEX_OBJECT  2400  nhiều gờ cạnh nhưng ít chữ — gờ cạnh sống sót qua
+#                         phép thu nhỏ tốt hơn nét chữ nhiều.
+#   ENTIRE_ROOM     1600  phòng cần phủ rộng chứ không cần đọc chữ, mà phòng
+#                         thì đi kèm 300-400 tấm nên RAM chặng 3 không kham
+#                         nổi cỡ lớn hơn.
+#
+# 3200px là trần có ích chứ không phải trần tuỳ ý: COLMAP tự hạ ảnh xuống
+# max_image_size (mặc định 3200) để dò đặc trưng rồi mới nhân toạ độ keypoint
+# trở lại cỡ gốc. Nạp ảnh to hơn 3200px là trả tiền tải lên mà không nhận thêm
+# đặc trưng nào.
 #
 # Đổi lại: ảnh 3200px nặng gấp bốn, chặng 3 train chậm khoảng ba lần, và RAM
 # của Colab free chỉ chứa nổi chừng 450 tấm ở cỡ đó. Bù lại thì nên chụp ít
-# ảnh hơn — 160 ảnh 3200px về đích nhanh hơn 320 ảnh 1600px mà lại nét hơn,
-# vì số cặp ảnh phải ghép ở chặng 1 giảm bốn lần.
-CO_ANH = [
-    (1600, "1600 px — mặc định, hợp cho cả căn phòng"),
-    (2400, "2400 px — vật thể nhiều gờ cạnh"),
-    (3200, "3200 px — vật thể có chữ nhỏ cần đọc được"),
-]
+# ảnh hơn — 180 ảnh 3200px về đích nhanh hơn 320 ảnh 1600px mà lại nét hơn,
+# vì số cặp ảnh phải ghép ở chặng 1 giảm còn một phần ba (16.110 thay vì
+# 51.040). Con số 180 lấy ở SO_ANH_MUC_TIEU ngay dưới.
+PRESET_ANH = {
+    "FLAT_OBJECT":    (3200, "Vật thể có chữ nhỏ cần đọc được — 3200 px"),
+    "COMPLEX_OBJECT": (2400, "Vật thể nhiều gờ cạnh, ít chữ — 2400 px"),
+    "ENTIRE_ROOM":    (1600, "Cả căn phòng — 1600 px"),
+}
+
+# Thứ tự hiện trong ô chọn. Cái đầu tiên là mặc định, và mặc định bây giờ là
+# FLAT_OBJECT chứ không còn là 1600px: quét vật thể là việc app này làm nhiều
+# nhất, mà chọn thiếu độ phân giải thì không có đường sửa ở chặng sau.
+THU_TU_PRESET = ["FLAT_OBJECT", "COMPLEX_OBJECT", "ENTIRE_ROOM"]
+
+# Số ảnh nên giữ lại, theo preset. Lấy đúng cận trên của
+# PRESETS[...]["pipeline"]["so_anh"] ở notebook chặng 3.
+#
+# Vì sao phải bớt ảnh, chứ không phải "càng nhiều càng tốt":
+#
+#   RAM chặng 3.  320 ảnh ở 3200px ăn 7,37 GB RAM (đã tính uint8 và đã dẹp
+#                 alpha_mask), mà trần của Colab free là 10,5 GB — biên mỏng
+#                 tới mức chỉ cần quên một bản vá là chết giữa buổi train.
+#                 180 ảnh còn 4,15 GB, thở được.
+#   Chặng 2.      Mapper tăng siêu tuyến tính theo số ảnh: trên con i3 hai
+#                 nhân, 320 ảnh mất 105 phút, 180 ảnh còn chừng 35.
+#   Chặng 1.      Ghép exhaustive là n(n-1)/2 cặp: 51.040 xuống 16.110.
+#
+# Và cái giá gần như bằng không: 180 tấm quanh một vật thể là mỗi tấm cách nhau
+# 2 độ, trong khi dựng hình chỉ cần 5-10 độ. Phòng thì khác — nó cần phủ rộng
+# nên không giảm, xem ENTIRE_ROOM.
+SO_ANH_MUC_TIEU = {
+    "FLAT_OBJECT": 180,
+    "COMPLEX_OBJECT": 220,
+    "ENTIRE_ROOM": None,        # phòng cần phủ rộng, bớt tấm nào là hổng chỗ đó
+}
+
+# Cạnh của miếng cắt giữa ảnh dùng để chấm điểm độ nét.
+#
+# Cắt chứ không thu nhỏ, và đây là điểm mấu chốt: thu nhỏ ảnh xuống rồi mới đo
+# thì chính những tần số cao phân biệt nét với mờ bị phép thu nhỏ xoá mất, đo
+# xong chỉ còn nhiễu. Cắt giữ nguyên tần số gốc, mà lại chỉ phải chập trên 1,4
+# triệu điểm ảnh thay vì 12 triệu.
+#
+# Lấy chính giữa vì quét vòng quanh thì vật thể nằm giữa khung.
+CANH_CAT_DO_NET = 1200
 
 # Chất lượng 93 là mức mắt thường không thấy khác mà tệp nhẹ đi mấy lần.
 CHAT_LUONG = 93
@@ -216,6 +268,7 @@ CSS = b"""
 .nhat      { opacity: 0.62; }
 .nhat-hon  { opacity: 0.4; }
 .log textview { font-family: monospace; font-size: 9pt; }
+.bieu-do   { font-family: monospace; font-size: 9pt; opacity: 0.8; }
 """
 
 
@@ -289,10 +342,108 @@ def dem_anh(thu_muc: Path) -> int:
         return 0
 
 
+def kich_thuoc_anh(duong: Path):
+    """
+    Đọc cỡ thật của một tấm ảnh, tính bằng điểm ảnh. Trả về (rộng, cao) hoặc None.
+
+    Đọc thẳng vài chục byte đầu tệp chứ không nhờ ImageMagick: chặng 2 không hề
+    cần ImageMagick, mà bắt cả trang phải có nó chỉ để biết cỡ ảnh thì vô lý.
+    Đọc kiểu này cũng không phải giải mã tấm ảnh, nên 320 tấm xong trong chớp
+    mắt thay vì cả phút.
+
+    Chỉ hiểu JPEG và PNG. Định dạng khác trả về None, và bên gọi phải coi đó là
+    "không biết" chứ không phải "khớp rồi".
+    """
+    import struct
+
+    try:
+        with open(duong, "rb") as f:
+            dau = f.read(2)
+
+            # PNG: cỡ ảnh nằm trong khối IHDR, ngay sau 8 byte chữ ký + 8 byte
+            # độ dài và tên khối.
+            if dau == b"\x89P":
+                f.seek(0)
+                if f.read(8) != b"\x89PNG\r\n\x1a\n":
+                    return None
+                f.seek(16)
+                than = f.read(8)
+                if len(than) < 8:
+                    return None
+                return struct.unpack(">II", than)
+
+            if dau != b"\xff\xd8":                  # không phải JPEG
+                return None
+
+            # JPEG: đi lần lượt qua các khối cho tới khối SOF (khung ảnh).
+            # Cỡ ảnh nằm trong SOFn, và chỉ trong SOFn.
+            while True:
+                b = f.read(1)
+                if not b:
+                    return None
+                if b[0] != 0xFF:                    # lạc nhịp, không đọc tiếp được
+                    return None
+                ma = f.read(1)
+                while ma and ma[0] == 0xFF:         # chuỗi FF đệm, bỏ qua
+                    ma = f.read(1)
+                if not ma:
+                    return None
+                ma = ma[0]
+                if ma in (0xD8, 0x01) or 0xD0 <= ma <= 0xD7:
+                    continue                        # khối không có phần thân
+                if ma == 0xDA:                      # tới phần ảnh nén, hết chỗ tìm
+                    return None
+                dai_byte = f.read(2)
+                if len(dai_byte) < 2:
+                    return None
+                (dai,) = struct.unpack(">H", dai_byte)
+                # SOF0-SOF15, trừ ba mã dùng cho việc khác: DHT, JPG, DAC.
+                if 0xC0 <= ma <= 0xCF and ma not in (0xC4, 0xC8, 0xCC):
+                    than = f.read(5)
+                    if len(than) < 5:
+                        return None
+                    cao, rong = struct.unpack(">HH", than[1:5])
+                    return rong, cao
+                f.seek(dai - 2, os.SEEK_CUR)
+    except (OSError, struct.error):
+        return None
+
+
+def co_anh_trong_thu_muc(thu_muc: Path):
+    """
+    Những cỡ ảnh có mặt trong một thư mục.
+
+    Trả về (tập hợp (rộng, cao), số tấm đọc được cỡ, số tấm không đọc được).
+    Đọc HẾT chứ không lấy mẫu: lấy mẫu thì đúng tấm lạc loài lại là tấm bị bỏ
+    qua, mà tấm lạc loài chính là thứ ta đi tìm.
+    """
+    co, doc_duoc, chiu = set(), 0, 0
+    try:
+        ds = sorted(f for f in thu_muc.iterdir()
+                    if f.is_file() and f.suffix.lower() in DUOI_ANH)
+    except OSError:
+        return co, 0, 0
+    for f in ds:
+        kt = kich_thuoc_anh(f)
+        if kt is None:
+            chiu += 1
+        else:
+            co.add(kt)
+            doc_duoc += 1
+    return co, doc_duoc, chiu
+
+
 def doc_database(duong: Path):
     """
     Đọc thử file database của COLMAP.
-    Trả về (số ảnh, số cặp đã ghép) hoặc None nếu file không phải database COLMAP.
+
+    Trả về (số ảnh, số cặp đã ghép, tập hợp cỡ ảnh ghi trong bảng cameras),
+    hoặc None nếu file không phải database COLMAP.
+
+    Bảng cameras mới là chỗ đáng đọc nhất, dù trước giờ không ai đọc: nó ghi
+    thông số nội tại tính theo ĐIỂM ẢNH của bộ ảnh đã dùng lúc ghép. Đưa cho
+    chặng 2 một bộ ảnh cỡ khác thì image_undistorter vẫn chạy êm ru và vẫn xuất
+    ra một model — chỉ có điều model đó sai. Không có gì báo lỗi cả.
     """
     try:
         with sqlite3.connect(f"file:{duong}?mode=ro", uri=True) as d:
@@ -300,9 +451,122 @@ def doc_database(duong: Path):
             so_anh = c.execute("SELECT COUNT(*) FROM images").fetchone()[0]
             so_cap = c.execute(
                 "SELECT COUNT(*) FROM two_view_geometries").fetchone()[0]
-            return so_anh, so_cap
+            co = {(int(r), int(cao)) for r, cao
+                  in c.execute("SELECT DISTINCT width, height FROM cameras")}
+            return so_anh, so_cap, co
     except sqlite3.Error:
         return None
+
+
+def ta_co_anh(co) -> str:
+    """Viết một tập hợp cỡ ảnh thành chuỗi đọc được: "2400×3200"."""
+    return ", ".join(f"{r}×{c}" for r, c in sorted(co)) or "không đọc được"
+
+
+def do_net(duong: Path):
+    """
+    Chấm điểm độ nét một tấm ảnh. Trả về số thực, hoặc None nếu đo không được.
+
+    Cách đo là phương sai Laplacian, cách kinh điển để bắt ảnh rung tay hoặc
+    lạc nét: Laplacian là đạo hàm bậc hai, nó chỉ nảy lên ở chỗ có biên. Ảnh
+    nét đầy biên nên phương sai lớn; ảnh mờ đã bị làm nhẵn nên phương sai bé.
+    Đo thử trên cùng một tấm: nét 3212, mờ nhẹ (Gauss 1,2px) 37,9, mờ nặng
+    (Gauss 3px) 2,3 — chênh nhau hàng chục lần, không sợ lẫn.
+
+    CON SỐ NÀY CHỈ CÓ NGHĨA KHI SO VỚI NHAU trong cùng một bộ ảnh. Nó phụ thuộc
+    vào vật thể chụp cái gì: chụp trang sách đầy chữ thì tấm nào cũng điểm cao
+    hơn hẳn chụp một quả cầu nhẵn. Đừng lấy ngưỡng của bộ này áp cho bộ khác.
+    """
+    lenh = [
+        "magick", str(duong),
+        "-colorspace", "Gray",
+        # Cắt miếng giữa ở ĐỘ PHÂN GIẢI GỐC — xem CANH_CAT_DO_NET.
+        "-gravity", "center",
+        "-crop", f"{CANH_CAT_DO_NET}x{CANH_CAT_DO_NET}+0+0", "+repage",
+        # scale='!' bảo ImageMagick tự co giãn nhân chập cho vừa dải giá trị,
+        # không thì phần âm của Laplacian bị kẹp về 0 và mất một nửa tín hiệu.
+        "-define", "convolve:scale=!",
+        "-morphology", "Convolve", "Laplacian:0",
+        "-format", "%[fx:standard_deviation]", "info:",
+    ]
+    try:
+        kq = subprocess.run(lenh, capture_output=True, text=True,
+                            env={**os.environ, "MAGICK_THREAD_LIMIT": "1"})
+    except OSError:
+        return None
+    if kq.returncode != 0:
+        return None
+    try:
+        # fx trả về độ lệch chuẩn đã chuẩn hoá về [0,1]. Bình phương lên thành
+        # phương sai, rồi nhân 1e6 cho ra số người đọc được thay vì 0,0000023.
+        return float(kq.stdout.strip()) ** 2 * 1e6
+    except ValueError:
+        return None
+
+
+def bieu_do_net(diem, cot: int = 12) -> str:
+    """
+    Biểu đồ phân bố độ nét, vẽ bằng chữ.
+
+    Mục đích không phải làm đẹp mà để trả lời một câu: cả bộ ảnh mờ đều, hay
+    chỉ vài tấm mờ? Hai chuyện đó chữa bằng hai cách khác hẳn nhau — cả bộ mờ
+    thì phải đi chụp lại, còn vài tấm mờ thì bỏ mấy tấm đó là xong.
+    """
+    co = [d for d in diem if d is not None]
+    if not co:
+        return "Không chấm điểm được tấm nào."
+    it, nhieu = min(co), max(co)
+    if nhieu - it < 1e-9:                  # cả bộ y hệt nhau, không có gì để vẽ
+        return f"Cả {len(co)} tấm cùng một điểm nét ({it:.0f})."
+
+    thung = [0] * cot
+    for d in co:
+        i = int((d - it) / (nhieu - it) * cot)
+        thung[min(i, cot - 1)] += 1
+    cao_nhat = max(thung)
+
+    dong = ["Độ nét (phương sai Laplacian) — càng phải càng nét:"]
+    for i, n in enumerate(thung):
+        canh_duoi = it + (nhieu - it) * i / cot
+        vach = "█" * round(n / cao_nhat * 28) if n else ""
+        dong.append(f"  {canh_duoi:8.0f} │{vach:<28} {n}")
+    sap = sorted(co)
+    giua = sap[len(sap) // 2]
+    dong.append(f"  thấp nhất {it:.0f} · trung vị {giua:.0f} · cao nhất {nhieu:.0f}")
+    if it < giua / 4:
+        dong.append("  Đuôi trái dài — có mấy tấm mờ hẳn so với phần còn lại.")
+    return "\n".join(dong)
+
+
+def chon_giu(ds, diem, muc_tieu):
+    """
+    Chọn muc_tieu tấm trong ds, GIỮ NGUYÊN độ phủ vòng tròn.
+
+    Chia danh sách thành đúng muc_tieu khoảng liền nhau, đều nhau, rồi mỗi
+    khoảng giữ lại tấm nét nhất. Danh sách đã sắp theo tên tệp, mà tên tệp máy
+    ảnh đánh theo thứ tự bấm máy, nên "khoảng liền nhau" cũng chính là "cung
+    liền nhau" trên vòng quét.
+
+    Vì sao KHÔNG được lấy N tấm đầu danh sách: quét vòng quanh vật thể thì nửa
+    sau danh sách là nửa sau vòng tròn. Cắt đuôi là mất hẳn một bên vật thể, và
+    COLMAP sẽ dựng ra đúng một nửa mô hình.
+
+    Vì sao không lấy cách đều máy móc (tấm 1, 3, 5...): cách đều thì giữ đúng
+    độ phủ nhưng gặp tấm mờ vẫn phải lấy. Chia khoảng rồi chọn tấm nét nhất
+    trong khoảng thì vừa giữ độ phủ, vừa tự loại tấm rung tay — với muc_tieu
+    bằng một nửa số ảnh, nó chính là "mỗi cặp giữ tấm nét hơn".
+    """
+    n = len(ds)
+    if not muc_tieu or muc_tieu >= n:
+        return list(ds)
+    giu = []
+    for i in range(muc_tieu):
+        dau, cuoi = i * n // muc_tieu, (i + 1) * n // muc_tieu
+        # Tấm không chấm điểm được coi như kém nhất, nhưng vẫn được lấy nếu cả
+        # khoảng chẳng tấm nào chấm được — thà giữ độ phủ còn hơn thủng một cung.
+        giu.append(max(range(dau, cuoi),
+                       key=lambda k: -1.0 if diem[k] is None else diem[k]))
+    return [ds[k] for k in giu]
 
 
 def doc_thoi_gian(giay: float) -> str:
@@ -328,7 +592,7 @@ def doc_con_lai(giay: float) -> str:
 
 class TrangNenAnh(Gtk.Box):
     """
-    Thu nhỏ ảnh còn 1600px rồi gói lại thành một tệp mang lên Colab.
+    Thu nhỏ ảnh theo cỡ của preset rồi gói lại thành một tệp mang lên Colab.
 
     Gói PHẲNG: ảnh nằm thẳng ở gốc tệp nén, không có thư mục bọc bên ngoài —
     giải nén ra là thấy ảnh ngay. Khác với "zip -r" trong script cũ, vốn bọc
@@ -344,7 +608,9 @@ class TrangNenAnh(Gtk.Box):
         self.dang_chay = False
         self.bi_huy = False
         self.dich_tu_dien = ""      # đường dẫn ra do tool tự điền, chưa ai sửa
-        self.canh = CO_ANH[0][0]    # cỡ ảnh của lần nén đang chạy
+        # Cỡ ảnh của lần nén đang chạy, chốt theo preset đang chọn.
+        self.canh = PRESET_ANH[THU_TU_PRESET[0]][0]
+        self.muc_tieu = SO_ANH_MUC_TIEU[THU_TU_PRESET[0]]
 
         cuon = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER,
                                   vexpand=True)
@@ -372,11 +638,15 @@ class TrangNenAnh(Gtk.Box):
         self.o_dich.add_suffix(self._nut_duyet(self._chon_dich))
         nhom.add(self.o_dich)
 
-        # Chọn cỡ ảnh ở đây là chốt luôn cho cả ba chặng sau — xem CO_ANH.
+        # Chọn loại cảnh ở đây là chốt luôn cỡ ảnh cho cả ba chặng sau — xem
+        # PRESET_ANH. Người dùng chọn thứ mình biết ("tôi chụp cái gì"), không
+        # phải thứ mình phải tự suy ra ("nên để bao nhiêu pixel").
         self.o_canh = Adw.ComboRow(
-            title="Thu nhỏ cạnh dài về",
-            subtitle="Chọn 3200 nếu cần đọc được chữ nhỏ trên vật thể",
-            model=Gtk.StringList.new([ten for _, ten in CO_ANH]))
+            title="Loại cảnh đang quét",
+            subtitle="Quyết định cỡ ảnh, và cỡ ảnh thì không sửa lại được ở "
+                     "chặng sau",
+            model=Gtk.StringList.new(
+                [PRESET_ANH[ten][1] for ten in THU_TU_PRESET]))
         self.o_canh.connect("notify::selected", self._khi_doi_canh)
         nhom.add(self.o_canh)
 
@@ -385,6 +655,22 @@ class TrangNenAnh(Gtk.Box):
             model=Gtk.StringList.new([ten for _, ten in KIEU_NEN]))
         self.o_kieu.connect("notify::selected", self._khi_doi_kieu)
         nhom.add(self.o_kieu)
+
+        # Giảm bớt ảnh. Bật sẵn hay không là theo preset: vật thể thì thừa ảnh,
+        # phòng thì thiếu — xem SO_ANH_MUC_TIEU.
+        self.o_giam = Adw.SwitchRow(
+            title="Giảm bớt số ảnh",
+            subtitle="Chia đều vòng quét rồi mỗi khoảng giữ tấm nét nhất — "
+                     "không cắt đầu, không cắt đuôi",
+            active=SO_ANH_MUC_TIEU[THU_TU_PRESET[0]] is not None)
+        self.o_giam.connect("notify::active", self._khi_doi_giam)
+        nhom.add(self.o_giam)
+
+        self.o_so_anh = Adw.SpinRow.new_with_range(20, 2000, 10)
+        self.o_so_anh.set_title("Giữ lại bao nhiêu ảnh")
+        self.o_so_anh.set_subtitle("Nhiều hơn số ảnh đang có thì giữ nguyên tất")
+        self.o_so_anh.set_value(SO_ANH_MUC_TIEU[THU_TU_PRESET[0]] or 180)
+        nhom.add(self.o_so_anh)
 
         # Bật sẵn, và nên để yên: chặng dựng camera cần đúng bộ ảnh đã thu nhỏ
         # này chứ không phải ảnh gốc. Tắt đi thì lát nữa phải tự giải nén ra lại.
@@ -398,6 +684,12 @@ class TrangNenAnh(Gtk.Box):
         self.nhan_tt = Gtk.Label(label="", wrap=True, xalign=0, visible=False)
         self.nhan_tt.add_css_class("nhat")
         hop.append(self.nhan_tt)
+
+        # Biểu đồ phân bố độ nét. Phải là chữ đơn cách, không thì các vạch so le.
+        self.nhan_bieu_do = Gtk.Label(label="", xalign=0, visible=False,
+                                      selectable=True)
+        self.nhan_bieu_do.add_css_class("bieu-do")
+        hop.append(self.nhan_bieu_do)
 
         self.thanh = Gtk.ProgressBar(show_text=True, visible=False)
         hop.append(self.thanh)
@@ -415,6 +707,8 @@ class TrangNenAnh(Gtk.Box):
         self.nut_huy.connect("clicked", self._bam_huy)
         hop_nut.append(self.nut_huy)
         hop.append(hop_nut)
+
+        self._khi_doi_giam()
 
         if shutil.which("magick") is None:
             self.nut_chay.set_sensitive(False)
@@ -466,9 +760,13 @@ class TrangNenAnh(Gtk.Box):
     def _duoi_dang_chon(self) -> str:
         return KIEU_NEN[self.o_kieu.get_selected()][0]
 
+    def _preset(self) -> str:
+        """Tên preset đang chọn, đúng tên dùng ở notebook chặng 3."""
+        return THU_TU_PRESET[self.o_canh.get_selected()]
+
     def _canh(self) -> int:
-        """Cạnh dài đang chọn, tính bằng pixel."""
-        return CO_ANH[self.o_canh.get_selected()][0]
+        """Cạnh dài đang chọn, tính bằng pixel. Suy ra từ preset, không nhập tay."""
+        return PRESET_ANH[self._preset()][0]
 
     def _khi_doi_nguon(self, *_):
         """Tự điền đường dẫn ra theo tên thư mục ảnh — trừ khi người dùng đã sửa."""
@@ -483,8 +781,21 @@ class TrangNenAnh(Gtk.Box):
         self.o_dich.set_text(self.dich_tu_dien)
 
     def _khi_doi_canh(self, *_):
-        """Đổi cỡ ảnh thì đổi luôn tên tệp ra, để hai bộ khác cỡ không đè nhau."""
+        """
+        Đổi preset thì đổi luôn tên tệp ra, để hai bộ khác cỡ không đè nhau.
+
+        Và đổi luôn số ảnh mục tiêu: phòng thì không giảm, vật thể thì giảm —
+        hai chuyện này đi liền nhau, bắt người dùng nhớ chỉnh cả hai là có ngày
+        quét phòng mà chỉ còn 180 tấm.
+        """
         self._khi_doi_nguon()
+        muc_tieu = SO_ANH_MUC_TIEU[self._preset()]
+        self.o_giam.set_active(muc_tieu is not None)
+        if muc_tieu is not None:
+            self.o_so_anh.set_value(muc_tieu)
+
+    def _khi_doi_giam(self, *_):
+        self.o_so_anh.set_sensitive(self.o_giam.get_active())
 
     def _khi_doi_kieu(self, *_):
         """Đổi kiểu nén thì thay luôn phần đuôi của đường dẫn ra."""
@@ -544,13 +855,17 @@ class TrangNenAnh(Gtk.Box):
         # Chốt cỡ ảnh ngay tại đây, khi còn đang ở luồng giao diện. Luồng nén
         # chạy nền không được phép đọc trạng thái widget.
         self.canh = self._canh()
+        self.muc_tieu = (int(self.o_so_anh.get_value())
+                         if self.o_giam.get_active() else None)
+        self.nhan_bieu_do.set_visible(False)
         # Khoá nút quay lại: đang nén dở mà bỏ đi trang khác thì lát nữa quay
         # vào chẳng biết nó chạy tới đâu. Muốn thoát thì bấm "Dừng lại".
         self.cua.nut_quay_lai.set_sensitive(False)
         self.nut_chay.set_visible(False)
         self.nut_huy.set_visible(True)
         self.nut_huy.set_sensitive(True)
-        for o in (self.o_nguon, self.o_dich, self.o_kieu, self.o_canh):
+        for o in (self.o_nguon, self.o_dich, self.o_kieu, self.o_canh,
+                  self.o_giam, self.o_so_anh):
             o.set_sensitive(False)
         self.nhan_tt.set_visible(True)
         self.thanh.set_visible(True)
@@ -612,8 +927,34 @@ class TrangNenAnh(Gtk.Box):
             except OSError:
                 pass
 
+    def _cham_diem_ca_bo(self, ds):
+        """
+        Chấm điểm độ nét cả bộ ảnh. Trả về danh sách điểm, cùng thứ tự với ds.
+
+        Chạy trước khi thu nhỏ, và phải như vậy: thu nhỏ xong thì tấm rung tay
+        với tấm nét trông na ná nhau, đúng những tần số phân biệt chúng vừa bị
+        phép thu nhỏ xoá đi.
+        """
+        diem = [None] * len(ds)
+        xong = 0
+        with cf.ThreadPoolExecutor(max_workers=os.cpu_count() or 2) as bom:
+            viec = {bom.submit(do_net, f): i for i, f in enumerate(ds)}
+            for v in cf.as_completed(viec):
+                if self.bi_huy:
+                    bom.shutdown(cancel_futures=True)
+                    break
+                diem[viec[v]] = v.result()
+                xong += 1
+                GLib.idle_add(self._dat_tien_do, xong, len(ds),
+                              "đang chấm điểm độ nét…")
+        return diem
+
+    def _hien_bieu_do(self, chu: str):
+        self.nhan_bieu_do.set_label(chu)
+        self.nhan_bieu_do.set_visible(True)
+        return False
+
     def _luong(self, nguon: Path, dich: Path, ds):
-        tong = len(ds)
         self._don_rac_cu(dich.parent)
         tam = Path(tempfile.mkdtemp(prefix=".nen-anh-", dir=dich.parent))
         try:
@@ -623,6 +964,22 @@ class TrangNenAnh(Gtk.Box):
                     self._bao, f"Ảnh có {len(muc)} mức tiêu cự khác nhau "
                                f"({', '.join(sorted(muc))}) — COLMAP dễ dựng lệch")
 
+            # Chấm điểm độ nét cho MỌI lần chạy, kể cả khi không giảm ảnh:
+            # biểu đồ phân bố trả lời câu "cả bộ mờ đều hay chỉ vài tấm mờ",
+            # mà đó là câu đáng biết trước khi ngồi chờ ba tiếng ở chặng 2.
+            # Nó tốn thêm chừng một phần tư giây mỗi tấm, so với vài phút của
+            # phần thu nhỏ ngay dưới thì không đáng kể.
+            diem = self._cham_diem_ca_bo(ds)
+            if self.bi_huy:
+                raise InterruptedError
+            GLib.idle_add(self._hien_bieu_do, bieu_do_net(diem))
+
+            bo_di = 0
+            if self.muc_tieu and self.muc_tieu < len(ds):
+                bo_di = len(ds) - self.muc_tieu
+                ds = chon_giu(ds, diem, self.muc_tieu)
+
+            tong = len(ds)
             xong, loi = 0, []
             with cf.ThreadPoolExecutor(max_workers=os.cpu_count() or 2) as bom:
                 viec = [bom.submit(self._thu_nho, f, tam / f.name) for f in ds]
@@ -649,7 +1006,7 @@ class TrangNenAnh(Gtk.Box):
             return
         finally:
             shutil.rmtree(tam, ignore_errors=True)
-        GLib.idle_add(self._xong, dich, loi, None)
+        GLib.idle_add(self._xong, dich, loi, None, tong, bo_di)
 
     def _goi(self, tam: Path, dich: Path):
         """Gói phẳng: mỗi ảnh vào tệp nén bằng đúng cái tên của nó, không kèm lối."""
@@ -665,14 +1022,19 @@ class TrangNenAnh(Gtk.Box):
                     z.write(f, f.name)
         cho.replace(dich)
 
-    def _xong(self, dich: Path, loi, hong: str | None):
+    def _xong(self, dich: Path, loi, hong: str | None,
+              con_lai: int = 0, bo_di: int = 0):
         self.dang_chay = False
         self.cua.nut_quay_lai.set_sensitive(True)
         self.nut_huy.set_visible(False)
         self.nut_huy.set_label("Dừng lại")
         self.nut_chay.set_visible(True)
-        for o in (self.o_nguon, self.o_dich, self.o_kieu, self.o_canh):
+        for o in (self.o_nguon, self.o_dich, self.o_kieu, self.o_canh,
+                  self.o_giam, self.o_so_anh):
             o.set_sensitive(True)
+        # Ô số ảnh chỉ mở khi công tắc giảm ảnh đang bật — vòng lặp trên mở
+        # tuốt, nên phải trả lại đúng trạng thái ở đây.
+        self._khi_doi_giam()
         self.thanh.set_visible(False)
 
         if hong:
@@ -681,6 +1043,8 @@ class TrangNenAnh(Gtk.Box):
             return
         cd = dich.stat().st_size / 1e6 if dich.is_file() else 0
         chu = f"Xong: {dich.name} · {cd:.0f} MB"
+        if bo_di:
+            chu += f" · giữ {con_lai} ảnh, bỏ bớt {bo_di} tấm kém nét hơn"
         if loi:
             chu += f" · {len(loi)} ảnh lỗi bị bỏ qua"
         self.nhan_tt.set_label(chu + f"\n{dich}")
@@ -703,6 +1067,9 @@ class CuaSo(Adw.ApplicationWindow):
         self.file_db: Path | None = None
         self.so_anh = 0
         self.so_anh_db = 0
+        self.co_anh_thuc: set = set()       # cỡ ảnh đọc từ chính các tấm ảnh
+        self.so_anh_kho_doc = 0            # tấm không đọc nổi cỡ (không phải JPEG/PNG)
+        self.co_anh_db: set = set()        # cỡ ảnh ghi trong bảng cameras của .db
 
         self.dang_chay = False
         self.dang_nen = False
@@ -1000,7 +1367,12 @@ class CuaSo(Adw.ApplicationWindow):
             return
 
         self.thu_muc_goc, self.thu_muc_anh, self.so_anh = duong, anh, n
-        self.hang_anh.set_subtitle(f"{anh}   ({n} ảnh)")
+        # Đọc cỡ thật của từng tấm ngay lúc này. Chỉ động vào vài chục byte đầu
+        # mỗi tệp nên không thấy chậm, mà lại là dữ kiện duy nhất bắt được vụ
+        # đưa nhầm thư mục ảnh — xem _cap_nhat_san_sang.
+        self.co_anh_thuc, _, self.so_anh_kho_doc = co_anh_trong_thu_muc(anh)
+        self.hang_anh.set_subtitle(
+            f"{anh}   ({n} ảnh, {ta_co_anh(self.co_anh_thuc)})")
         self._tinh_duong_ra()
         self._cap_nhat_san_sang()
 
@@ -1039,13 +1411,17 @@ class CuaSo(Adw.ApplicationWindow):
         if thong_tin is None:
             self._bao(f"“{duong.name}” không phải database của COLMAP")
             return
-        so_anh_db, so_cap = thong_tin
+        so_anh_db, so_cap, co_db = thong_tin
         self.file_db = duong
         self.so_anh_db = so_anh_db
+        self.co_anh_db = co_db
         cd = duong.stat().st_size / 1e9
+        # Đổi dấu phân cách nghìn RIÊNG cho con số, không đổi cho cả câu: chuỗi
+        # cỡ ảnh ngăn nhau bằng ", " nên thay tuốt là nó thành ". ".
+        so_cap_chu = f"{so_cap:,}".replace(",", ".")
         self.hang_db.set_subtitle(
-            f"{duong}\n{so_anh_db} ảnh · {so_cap:,} cặp đã ghép · {cd:.1f} GB"
-            .replace(",", "."))
+            f"{duong}\n{so_anh_db} ảnh · {so_cap_chu} cặp đã ghép · "
+            f"{ta_co_anh(co_db)} · {cd:.1f} GB")
         self._cap_nhat_san_sang()
 
     def _cap_nhat_san_sang(self):
@@ -1063,6 +1439,48 @@ class CuaSo(Adw.ApplicationWindow):
                 "Bấm “Chọn nơi lưu…” để chỉ sang chỗ khác.")
             self.nut_bat_dau.set_sensitive(False)
             return
+
+        # ------------------------------------------------------------------
+        # Cỡ ảnh phải khớp với cỡ ghi trong database. Đây là cái bẫy nguy hiểm
+        # nhất của cả quy trình, và trước đây chỉ có một dòng chữ trong README
+        # canh nó.
+        #
+        # Bảng cameras của .db ghi thông số nội tại tính theo điểm ảnh của bộ
+        # ảnh đã ghép ở chặng 1. Đưa cho chặng 2 bộ ảnh cỡ khác thì tiêu cự và
+        # tâm quang học lệch đi đúng bằng tỉ lệ hai cỡ — image_undistorter vẫn
+        # chạy hết, vẫn xuất ra model, không một dòng cảnh báo nào. Cái sai chỉ
+        # lộ ra sau khi train xong ở chặng 3.
+        #
+        # Nên chỗ này DỪNG HẲN chứ không cảnh báo suông, và in ra cả hai con số
+        # để biết mình đang cầm nhầm cái gì.
+        # ------------------------------------------------------------------
+        if co_anh and co_db and self.co_anh_thuc and self.co_anh_db:
+            khop = self.co_anh_thuc & self.co_anh_db
+            if not khop:
+                self.hang_uoc_luong.set_title("Ảnh không đúng cỡ ghi trong database")
+                self.hang_uoc_luong.set_subtitle(
+                    f"database ghi {ta_co_anh(self.co_anh_db)}, "
+                    f"còn thư mục ảnh là {ta_co_anh(self.co_anh_thuc)}.\n"
+                    "Nhiều khả năng đây là ảnh gốc, hoặc thư mục thu nhỏ ở một "
+                    "cỡ khác. Thông số camera trong database ghi theo điểm ảnh "
+                    "của bộ ảnh đã ghép, nên chạy tiếp là ra một model sai mà "
+                    "không có gì báo lỗi.\n"
+                    "Không có đường chữa ở đây: hoặc tìm đúng thư mục ảnh đã "
+                    "đưa lên Colab, hoặc ghép lại từ chặng 1 bằng bộ ảnh mới.")
+                self.nut_bat_dau.set_sensitive(False)
+                return
+            if self.co_anh_thuc - self.co_anh_db:
+                # Khớp một phần: có tấm đúng cỡ, có tấm không. Chạy được, nhưng
+                # thư mục đang lẫn ảnh của hai bộ khác nhau.
+                self._bao(f"Thư mục lẫn nhiều cỡ ảnh "
+                          f"({ta_co_anh(self.co_anh_thuc)}) — database chỉ ghi "
+                          f"{ta_co_anh(self.co_anh_db)}")
+
+        if co_anh and co_db and self.co_anh_db and self.so_anh_kho_doc:
+            # Không đọc nổi cỡ thì không kiểm tra được. Nói thẳng là "không
+            # biết", đừng để người dùng tưởng đã có ai canh giúp.
+            self._bao(f"{self.so_anh_kho_doc} tấm không đọc được cỡ ảnh "
+                      f"(chỉ đọc được JPEG và PNG) — chỗ đó không kiểm tra được")
 
         if co_anh and co_db and self.so_anh != self.so_anh_db:
             # Đây là cái bẫy dễ vấp nhất: lấy nhầm database của bộ ảnh khác.
