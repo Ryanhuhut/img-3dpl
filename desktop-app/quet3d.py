@@ -132,8 +132,9 @@ THU_MUC_MANG_DI = ("images", "sparse")
 #
 # Đổi lại: ảnh 3200px nặng gấp bốn, chặng 3 train chậm khoảng ba lần, và RAM
 # của Colab free chỉ chứa nổi chừng 450 tấm ở cỡ đó. Bù lại thì nên chụp ít
-# ảnh hơn — 160 ảnh 3200px về đích nhanh hơn 320 ảnh 1600px mà lại nét hơn,
-# vì số cặp ảnh phải ghép ở chặng 1 giảm bốn lần.
+# ảnh hơn — 180 ảnh 3200px về đích nhanh hơn 320 ảnh 1600px mà lại nét hơn,
+# vì số cặp ảnh phải ghép ở chặng 1 giảm còn một phần ba (16.110 thay vì
+# 51.040). Con số 180 lấy ở SO_ANH_MUC_TIEU ngay dưới.
 PRESET_ANH = {
     "FLAT_OBJECT":    (3200, "Vật thể có chữ nhỏ cần đọc được — 3200 px"),
     "COMPLEX_OBJECT": (2400, "Vật thể nhiều gờ cạnh, ít chữ — 2400 px"),
