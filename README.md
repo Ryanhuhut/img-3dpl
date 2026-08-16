@@ -262,6 +262,24 @@ database ghi 1200×1600, còn thư mục ảnh là 2400×3200.
 
 There is no way to reconcile those two numbers after the fact.
 
+#### A `.db` and a `sparse/` cannot be reused at a different size
+
+If you already have `PROJECT.db` and a `sparse/` folder built from 1600px
+photos, **none of it survives the move to 3200px.** Not the database, not the
+sparse model, not the undistorted output.
+
+The reason is the same one that makes the check above necessary: a camera in
+COLMAP is described by a focal length and a principal point measured **in
+pixels**. `1200x1600` with `f=1400px` and `3200x2400` with `f=1400px` are two
+different cameras — the second is an extreme wide angle. Nothing rescales those
+numbers for you, and rescaling them by hand would still leave keypoint
+coordinates, matches and triangulated points describing the old pixel grid.
+
+So changing the stage-0 size means starting over from **stage 1**: shrink again,
+zip again, match again, and rebuild camera positions. Stages 1 and 2 together are
+most of the wall-clock time in this pipeline, which is exactly why stage 0 asks
+you to pick the size before anything else rather than after.
+
 Output lands next to the photo folder as `<folder>_3d/`, so `Cap-GB_3200/`
 gives you `Cap-GB_3200_3d/`.
 

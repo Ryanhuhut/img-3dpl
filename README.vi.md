@@ -260,6 +260,24 @@ database ghi 1200×1600, còn thư mục ảnh là 2400×3200.
 
 Tới lúc đó thì hai con số ấy không còn cách nào dung hoà được nữa.
 
+#### File `.db` và thư mục `sparse/` không dùng lại được ở cỡ ảnh khác
+
+Nếu bạn đã có sẵn `PROJECT.db` và thư mục `sparse/` dựng từ ảnh 1600px thì
+**chuyển sang 3200px là không giữ lại được thứ gì cả.** Không giữ được database,
+không giữ được mô hình thưa, không giữ được cả phần ảnh đã nắn méo.
+
+Lý do đúng bằng lý do phải có phép kiểm tra bên trên: trong COLMAP, một camera
+được tả bằng tiêu cự và tâm quang học tính **theo điểm ảnh**. `1200×1600` với
+`f=1400px` và `3200×2400` với `f=1400px` là hai cái camera khác hẳn nhau — cái
+sau là ống góc siêu rộng. Không có chỗ nào tự nhân tỉ lệ mấy con số đó lên hộ
+bạn, mà có ngồi nhân tay thì toạ độ keypoint, các cặp đã ghép và các điểm đã
+tam giác hoá vẫn đang tả cái lưới điểm ảnh cũ.
+
+Nên đổi cỡ ảnh ở chặng 0 nghĩa là làm lại từ **chặng 1**: thu nhỏ lại, đóng zip
+lại, ghép lại, rồi dựng lại vị trí camera. Chặng 1 với chặng 2 cộng lại đã là
+gần hết thời gian của cả quy trình — chính vì vậy chặng 0 bắt chọn cỡ ảnh trước
+tiên chứ không để chọn sau.
+
 Kết quả nằm cạnh thư mục ảnh, tên là `<tên thư mục>_3d/` — `Cap-GB_3200/` sẽ cho
 ra `Cap-GB_3200_3d/`.
 
