@@ -243,13 +243,22 @@ bảng cảnh báo đỏ to đùng để không ai lỡ tay tắt máy giữa ch
 tự ngủ trong lúc làm việc.
 
 **Thư mục ảnh phải là đúng thư mục đã thu nhỏ và đưa lên Colab, không phải ảnh
-gốc.** Tên file hai bên y hệt nhau nên chẳng có lỗi nào báo cả — nhưng thông số
-camera nằm trong file `.db` mô tả đúng những tấm đã thu nhỏ ấy, đưa ảnh cỡ khác
-vào thì COLMAP không chết, nó chỉ dựng ra một mô hình sai. Nhớ giữ thư mục đó
-lại, đừng xoá sau khi đã đóng zip đưa lên Drive.
+gốc.** Tên file hai bên y hệt nhau, mà thông số camera trong file `.db` thì ghi
+theo điểm ảnh của chính bộ ảnh đã ghép — đưa ảnh cỡ khác vào thì
+`image_undistorter` chạy hết, xuất ra model đàng hoàng, chỉ có điều model đó
+sai. Nhớ giữ thư mục đó lại, đừng xoá sau khi đã đóng zip đưa lên Drive.
 
-Chuyện này đúng với mọi cỡ ảnh, không riêng 1600px: chặng 0 chọn 3200px thì
-chặng này phải nhận đúng thư mục 3200px.
+Bây giờ app tự kiểm tra chuyện này chứ không trông vào việc bạn có đọc đoạn văn
+trên hay không. Nó đọc `width`/`height` trong bảng `cameras` của file `.db`, đọc
+cỡ thật của ảnh trong thư mục bạn chọn, và nếu hai bên không có cỡ nào chung thì
+**in ra cả hai con số rồi không cho bấm Bắt đầu**:
+
+```
+Ảnh không đúng cỡ ghi trong database
+database ghi 1200×1600, còn thư mục ảnh là 2400×3200.
+```
+
+Tới lúc đó thì hai con số ấy không còn cách nào dung hoà được nữa.
 
 Kết quả nằm cạnh thư mục ảnh, tên là `<tên thư mục>_3d/` — `Cap-GB_3200/` sẽ cho
 ra `Cap-GB_3200_3d/`.

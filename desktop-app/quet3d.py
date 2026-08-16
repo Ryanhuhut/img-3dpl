@@ -308,10 +308,108 @@ def dem_anh(thu_muc: Path) -> int:
         return 0
 
 
+def kich_thuoc_anh(duong: Path):
+    """
+    Đọc cỡ thật của một tấm ảnh, tính bằng điểm ảnh. Trả về (rộng, cao) hoặc None.
+
+    Đọc thẳng vài chục byte đầu tệp chứ không nhờ ImageMagick: chặng 2 không hề
+    cần ImageMagick, mà bắt cả trang phải có nó chỉ để biết cỡ ảnh thì vô lý.
+    Đọc kiểu này cũng không phải giải mã tấm ảnh, nên 320 tấm xong trong chớp
+    mắt thay vì cả phút.
+
+    Chỉ hiểu JPEG và PNG. Định dạng khác trả về None, và bên gọi phải coi đó là
+    "không biết" chứ không phải "khớp rồi".
+    """
+    import struct
+
+    try:
+        with open(duong, "rb") as f:
+            dau = f.read(2)
+
+            # PNG: cỡ ảnh nằm trong khối IHDR, ngay sau 8 byte chữ ký + 8 byte
+            # độ dài và tên khối.
+            if dau == b"\x89P":
+                f.seek(0)
+                if f.read(8) != b"\x89PNG\r\n\x1a\n":
+                    return None
+                f.seek(16)
+                than = f.read(8)
+                if len(than) < 8:
+                    return None
+                return struct.unpack(">II", than)
+
+            if dau != b"\xff\xd8":                  # không phải JPEG
+                return None
+
+            # JPEG: đi lần lượt qua các khối cho tới khối SOF (khung ảnh).
+            # Cỡ ảnh nằm trong SOFn, và chỉ trong SOFn.
+            while True:
+                b = f.read(1)
+                if not b:
+                    return None
+                if b[0] != 0xFF:                    # lạc nhịp, không đọc tiếp được
+                    return None
+                ma = f.read(1)
+                while ma and ma[0] == 0xFF:         # chuỗi FF đệm, bỏ qua
+                    ma = f.read(1)
+                if not ma:
+                    return None
+                ma = ma[0]
+                if ma in (0xD8, 0x01) or 0xD0 <= ma <= 0xD7:
+                    continue                        # khối không có phần thân
+                if ma == 0xDA:                      # tới phần ảnh nén, hết chỗ tìm
+                    return None
+                dai_byte = f.read(2)
+                if len(dai_byte) < 2:
+                    return None
+                (dai,) = struct.unpack(">H", dai_byte)
+                # SOF0-SOF15, trừ ba mã dùng cho việc khác: DHT, JPG, DAC.
+                if 0xC0 <= ma <= 0xCF and ma not in (0xC4, 0xC8, 0xCC):
+                    than = f.read(5)
+                    if len(than) < 5:
+                        return None
+                    cao, rong = struct.unpack(">HH", than[1:5])
+                    return rong, cao
+                f.seek(dai - 2, os.SEEK_CUR)
+    except (OSError, struct.error):
+        return None
+
+
+def co_anh_trong_thu_muc(thu_muc: Path):
+    """
+    Những cỡ ảnh có mặt trong một thư mục.
+
+    Trả về (tập hợp (rộng, cao), số tấm đọc được cỡ, số tấm không đọc được).
+    Đọc HẾT chứ không lấy mẫu: lấy mẫu thì đúng tấm lạc loài lại là tấm bị bỏ
+    qua, mà tấm lạc loài chính là thứ ta đi tìm.
+    """
+    co, doc_duoc, chiu = set(), 0, 0
+    try:
+        ds = sorted(f for f in thu_muc.iterdir()
+                    if f.is_file() and f.suffix.lower() in DUOI_ANH)
+    except OSError:
+        return co, 0, 0
+    for f in ds:
+        kt = kich_thuoc_anh(f)
+        if kt is None:
+            chiu += 1
+        else:
+            co.add(kt)
+            doc_duoc += 1
+    return co, doc_duoc, chiu
+
+
 def doc_database(duong: Path):
     """
     Đọc thử file database của COLMAP.
-    Trả về (số ảnh, số cặp đã ghép) hoặc None nếu file không phải database COLMAP.
+
+    Trả về (số ảnh, số cặp đã ghép, tập hợp cỡ ảnh ghi trong bảng cameras),
+    hoặc None nếu file không phải database COLMAP.
+
+    Bảng cameras mới là chỗ đáng đọc nhất, dù trước giờ không ai đọc: nó ghi
+    thông số nội tại tính theo ĐIỂM ẢNH của bộ ảnh đã dùng lúc ghép. Đưa cho
+    chặng 2 một bộ ảnh cỡ khác thì image_undistorter vẫn chạy êm ru và vẫn xuất
+    ra một model — chỉ có điều model đó sai. Không có gì báo lỗi cả.
     """
     try:
         with sqlite3.connect(f"file:{duong}?mode=ro", uri=True) as d:
@@ -319,9 +417,16 @@ def doc_database(duong: Path):
             so_anh = c.execute("SELECT COUNT(*) FROM images").fetchone()[0]
             so_cap = c.execute(
                 "SELECT COUNT(*) FROM two_view_geometries").fetchone()[0]
-            return so_anh, so_cap
+            co = {(int(r), int(cao)) for r, cao
+                  in c.execute("SELECT DISTINCT width, height FROM cameras")}
+            return so_anh, so_cap, co
     except sqlite3.Error:
         return None
+
+
+def ta_co_anh(co) -> str:
+    """Viết một tập hợp cỡ ảnh thành chuỗi đọc được: "2400×3200"."""
+    return ", ".join(f"{r}×{c}" for r, c in sorted(co)) or "không đọc được"
 
 
 def doc_thoi_gian(giay: float) -> str:
@@ -731,6 +836,9 @@ class CuaSo(Adw.ApplicationWindow):
         self.file_db: Path | None = None
         self.so_anh = 0
         self.so_anh_db = 0
+        self.co_anh_thuc: set = set()       # cỡ ảnh đọc từ chính các tấm ảnh
+        self.so_anh_kho_doc = 0            # tấm không đọc nổi cỡ (không phải JPEG/PNG)
+        self.co_anh_db: set = set()        # cỡ ảnh ghi trong bảng cameras của .db
 
         self.dang_chay = False
         self.dang_nen = False
@@ -1028,7 +1136,12 @@ class CuaSo(Adw.ApplicationWindow):
             return
 
         self.thu_muc_goc, self.thu_muc_anh, self.so_anh = duong, anh, n
-        self.hang_anh.set_subtitle(f"{anh}   ({n} ảnh)")
+        # Đọc cỡ thật của từng tấm ngay lúc này. Chỉ động vào vài chục byte đầu
+        # mỗi tệp nên không thấy chậm, mà lại là dữ kiện duy nhất bắt được vụ
+        # đưa nhầm thư mục ảnh — xem _cap_nhat_san_sang.
+        self.co_anh_thuc, _, self.so_anh_kho_doc = co_anh_trong_thu_muc(anh)
+        self.hang_anh.set_subtitle(
+            f"{anh}   ({n} ảnh, {ta_co_anh(self.co_anh_thuc)})")
         self._tinh_duong_ra()
         self._cap_nhat_san_sang()
 
@@ -1067,13 +1180,17 @@ class CuaSo(Adw.ApplicationWindow):
         if thong_tin is None:
             self._bao(f"“{duong.name}” không phải database của COLMAP")
             return
-        so_anh_db, so_cap = thong_tin
+        so_anh_db, so_cap, co_db = thong_tin
         self.file_db = duong
         self.so_anh_db = so_anh_db
+        self.co_anh_db = co_db
         cd = duong.stat().st_size / 1e9
+        # Đổi dấu phân cách nghìn RIÊNG cho con số, không đổi cho cả câu: chuỗi
+        # cỡ ảnh ngăn nhau bằng ", " nên thay tuốt là nó thành ". ".
+        so_cap_chu = f"{so_cap:,}".replace(",", ".")
         self.hang_db.set_subtitle(
-            f"{duong}\n{so_anh_db} ảnh · {so_cap:,} cặp đã ghép · {cd:.1f} GB"
-            .replace(",", "."))
+            f"{duong}\n{so_anh_db} ảnh · {so_cap_chu} cặp đã ghép · "
+            f"{ta_co_anh(co_db)} · {cd:.1f} GB")
         self._cap_nhat_san_sang()
 
     def _cap_nhat_san_sang(self):
@@ -1091,6 +1208,48 @@ class CuaSo(Adw.ApplicationWindow):
                 "Bấm “Chọn nơi lưu…” để chỉ sang chỗ khác.")
             self.nut_bat_dau.set_sensitive(False)
             return
+
+        # ------------------------------------------------------------------
+        # Cỡ ảnh phải khớp với cỡ ghi trong database. Đây là cái bẫy nguy hiểm
+        # nhất của cả quy trình, và trước đây chỉ có một dòng chữ trong README
+        # canh nó.
+        #
+        # Bảng cameras của .db ghi thông số nội tại tính theo điểm ảnh của bộ
+        # ảnh đã ghép ở chặng 1. Đưa cho chặng 2 bộ ảnh cỡ khác thì tiêu cự và
+        # tâm quang học lệch đi đúng bằng tỉ lệ hai cỡ — image_undistorter vẫn
+        # chạy hết, vẫn xuất ra model, không một dòng cảnh báo nào. Cái sai chỉ
+        # lộ ra sau khi train xong ở chặng 3.
+        #
+        # Nên chỗ này DỪNG HẲN chứ không cảnh báo suông, và in ra cả hai con số
+        # để biết mình đang cầm nhầm cái gì.
+        # ------------------------------------------------------------------
+        if co_anh and co_db and self.co_anh_thuc and self.co_anh_db:
+            khop = self.co_anh_thuc & self.co_anh_db
+            if not khop:
+                self.hang_uoc_luong.set_title("Ảnh không đúng cỡ ghi trong database")
+                self.hang_uoc_luong.set_subtitle(
+                    f"database ghi {ta_co_anh(self.co_anh_db)}, "
+                    f"còn thư mục ảnh là {ta_co_anh(self.co_anh_thuc)}.\n"
+                    "Nhiều khả năng đây là ảnh gốc, hoặc thư mục thu nhỏ ở một "
+                    "cỡ khác. Thông số camera trong database ghi theo điểm ảnh "
+                    "của bộ ảnh đã ghép, nên chạy tiếp là ra một model sai mà "
+                    "không có gì báo lỗi.\n"
+                    "Không có đường chữa ở đây: hoặc tìm đúng thư mục ảnh đã "
+                    "đưa lên Colab, hoặc ghép lại từ chặng 1 bằng bộ ảnh mới.")
+                self.nut_bat_dau.set_sensitive(False)
+                return
+            if self.co_anh_thuc - self.co_anh_db:
+                # Khớp một phần: có tấm đúng cỡ, có tấm không. Chạy được, nhưng
+                # thư mục đang lẫn ảnh của hai bộ khác nhau.
+                self._bao(f"Thư mục lẫn nhiều cỡ ảnh "
+                          f"({ta_co_anh(self.co_anh_thuc)}) — database chỉ ghi "
+                          f"{ta_co_anh(self.co_anh_db)}")
+
+        if co_anh and co_db and self.co_anh_db and self.so_anh_kho_doc:
+            # Không đọc nổi cỡ thì không kiểm tra được. Nói thẳng là "không
+            # biết", đừng để người dùng tưởng đã có ai canh giúp.
+            self._bao(f"{self.so_anh_kho_doc} tấm không đọc được cỡ ảnh "
+                      f"(chỉ đọc được JPEG và PNG) — chỗ đó không kiểm tra được")
 
         if co_anh and co_db and self.so_anh != self.so_anh_db:
             # Đây là cái bẫy dễ vấp nhất: lấy nhầm database của bộ ảnh khác.

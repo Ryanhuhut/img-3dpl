@@ -245,13 +245,22 @@ warning so nobody shuts the machine down mid-run. It also blocks the system from
 suspending while it works.
 
 **The photo folder must be the shrunk one you uploaded, not the originals.** The
-file names are identical either way, so nothing complains — but the camera
-parameters inside the `.db` describe the shrunk images, and handing COLMAP a
-different size produces a reconstruction that is wrong rather than one that
-fails. Keep that folder around; do not delete it after uploading the zip.
+file names are identical either way, and the camera parameters inside the `.db`
+are recorded in the pixels of the images you matched — hand COLMAP a different
+size and `image_undistorter` runs to completion and writes a model that is
+simply wrong. Keep that folder around; do not delete it after uploading the zip.
 
-This holds at any size, not just 1600px: if stage 0 was run at 3200px, this
-stage needs the 3200px folder.
+The app now checks this rather than trusting you to read this paragraph. It
+reads `width`/`height` from the `cameras` table of the `.db`, reads the real
+pixel dimensions of the photos in the folder you picked, and if the two do not
+overlap it **prints both numbers and refuses to start**:
+
+```
+Ảnh không đúng cỡ ghi trong database
+database ghi 1200×1600, còn thư mục ảnh là 2400×3200.
+```
+
+There is no way to reconcile those two numbers after the fact.
 
 Output lands next to the photo folder as `<folder>_3d/`, so `Cap-GB_3200/`
 gives you `Cap-GB_3200_3d/`.
