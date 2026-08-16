@@ -142,9 +142,35 @@ Shoot fewer photos when you go bigger: 180 photos at 3200px finish sooner than
 pairs (16,110 instead of 51,040). 180 photos around an object is one every two
 degrees — well past the 5-10 degrees reconstruction actually needs.
 
+#### Blur scoring, and dropping photos without losing the orbit
+
+Every photo is scored with the **variance of its Laplacian** — the classic
+measure for camera shake and missed focus, since the Laplacian is a second
+derivative and only spikes at edges. A sharp photo is full of edges and scores
+high; a blurred one has been smoothed and scores low. On one test image: sharp
+3212, mild blur (Gaussian 1.2px) 37.9, heavy blur (3px) 2.3.
+
+The app prints the distribution as a histogram, which answers the question worth
+answering before you spend three hours in stage 2: *is the whole set soft, or
+just a few frames?* A soft set means going back and reshooting; a few soft
+frames means dropping those frames. The score is only meaningful **relative to
+other photos of the same subject** — a page of text scores higher than a smooth
+ceramic bowl no matter how well either was shot.
+
+Reduction to the preset's target count then works like this: the list is split
+into exactly that many consecutive, equal spans, and the sharpest photo in each
+span is kept.
+
+**Never take the first N of the list.** File names run in shutter order, so the
+second half of the list is the second half of the orbit — truncating it removes
+one whole side of the object and COLMAP reconstructs half a model. Splitting into
+spans keeps the coverage identical and drops the shaky frames for free; at half
+the original count it is exactly "keep the sharper one of each pair".
+
 The desktop app does this for you — the **Nén ảnh** button on the main screen
-picks the size from the preset, resizes, checks EXIF, and packs the result in
-one go. The script below is the same thing by hand.
+picks the size from the preset, resizes, checks EXIF, scores every photo for
+blur, optionally thins the set, and packs the result in one go. The script below
+is the same thing by hand, minus the blur scoring.
 
 Needs ImageMagick 7 (`magick`). Edit the four lines at the top, paste the rest.
 `SIZE` is the one number that matters — set it from the table above, and note

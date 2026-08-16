@@ -140,9 +140,33 @@ Lên cỡ lớn thì nên chụp ít ảnh đi: 180 ảnh 3200px về đích nha
 vì 51.040). 180 tấm quanh một vật thể là mỗi tấm cách nhau 2 độ — dư thừa so với
 mức 5-10 độ mà việc dựng hình thật sự cần.
 
+#### Chấm điểm độ nét, và bớt ảnh mà không thủng vòng quét
+
+Mỗi tấm được chấm điểm bằng **phương sai Laplacian** — cách kinh điển để bắt
+ảnh rung tay hoặc lạc nét, vì Laplacian là đạo hàm bậc hai, nó chỉ nảy lên ở
+chỗ có biên. Ảnh nét đầy biên nên điểm cao; ảnh mờ đã bị làm nhẵn nên điểm
+thấp. Đo thử trên cùng một tấm: nét 3212, mờ nhẹ (Gauss 1,2px) 37,9, mờ nặng
+(3px) 2,3.
+
+App vẽ luôn biểu đồ phân bố, để trả lời cái câu đáng biết trước khi ngồi chờ ba
+tiếng ở chặng 2: *cả bộ mờ đều, hay chỉ vài tấm mờ?* Cả bộ mờ thì phải đi chụp
+lại; vài tấm mờ thì bỏ mấy tấm đó là xong. Con số này **chỉ có nghĩa khi so với
+nhau trong cùng một bộ ảnh** — chụp trang sách đầy chữ thì tấm nào cũng điểm cao
+hơn hẳn chụp một cái bát sứ nhẵn, dù cả hai đều chụp khéo như nhau.
+
+Phần giảm số ảnh về mức của preset làm thế này: chia danh sách thành đúng ngần
+ấy khoảng liền nhau, đều nhau, rồi mỗi khoảng giữ lại tấm nét nhất.
+
+**Tuyệt đối không lấy N tấm đầu danh sách.** Tên tệp chạy theo thứ tự bấm máy,
+nên nửa sau danh sách chính là nửa sau vòng quét — cắt đuôi là mất hẳn một bên
+vật thể, và COLMAP sẽ dựng ra đúng một nửa mô hình. Chia khoảng thì độ phủ giữ
+y nguyên mà lại loại được tấm rung tay không mất gì thêm; khi giảm còn một nửa,
+nó đúng là "mỗi cặp giữ tấm nét hơn".
+
 App máy tính làm sẵn việc này — nút **Nén ảnh** ở màn hình chính tự lấy cỡ ảnh
-theo preset, thu nhỏ, kiểm tra EXIF, rồi gói lại thành một tệp. Đoạn script dưới
-đây là làm tay đúng ngần ấy việc.
+theo preset, thu nhỏ, kiểm tra EXIF, chấm điểm độ nét, bớt ảnh nếu bạn muốn, rồi
+gói lại thành một tệp. Đoạn script dưới đây là làm tay đúng ngần ấy việc, trừ
+phần chấm điểm độ nét.
 
 Cần ImageMagick 7 (lệnh `magick`). Sửa bốn dòng đầu, phần còn lại dán nguyên.
 `CANH` là con số duy nhất đáng bận tâm — lấy theo bảng bên trên, và nó đặt luôn
