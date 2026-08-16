@@ -296,11 +296,35 @@ Gaussians more aggressively (`percent_dense` 0.005 instead of 0.01), keeps
 densifying to iteration 20,000, and holds scaling down. `COMPLEX_OBJECT` backs
 all of that off for objects that are mostly edges and no fine print.
 
+A second line picks the milestone, which is how the two features from Inria's
+October 2024 update get switched on one at a time:
+
+```python
+MILESTONE = "V2c"   # "V1_5" | "V2a" | "V2b" | "V2c"
+```
+
+| milestone | rasteriser | new flags |
+|---|---|---|
+| `V1_5` | `dr_aa` | none, and no preset table either |
+| `V2a` | `3dgs_accel` | none |
+| `V2b` | `3dgs_accel` | `--antialiasing` |
+| `V2c` | `3dgs_accel` | `--antialiasing --optimizer_type sparse_adam` |
+
+`V2a` looks redundant and is not. `train.py` passes
+`separate_sh=SPARSE_ADAM_AVAILABLE`, so merely *installing* the accelerated
+rasteriser already changes the SH path before any flag is set. Without `V2a`
+there is no neutral baseline and the gain cannot be attributed. Exposure
+compensation is deliberately left out of this round — see
+[`docs/EXPOSURE.md`](docs/EXPOSURE.md) for why, and for the one-line change that
+enables it without breaking `--eval`.
+
 Cell 5 works out how much RAM the photos need and **stops** if it exceeds
 10.5 GB, saying how many photos would fit instead. Cell 7 patches the 3DGS
-source for the four things that have no command-line flag — `uint8` images,
-a hard Gaussian cap, an anisotropy penalty, and per-1000-iteration logging of
-Gaussian count and peak VRAM. It keeps a `.bak` and can be re-run safely.
+source for the five things that have no command-line flag — `uint8` images,
+a hard Gaussian cap, an anisotropy penalty, per-1000-iteration logging of
+Gaussian count and peak VRAM, and dropping the all-ones `alpha_mask` that the
+October 2024 code keeps for every camera (5.5 GB of RAM at 3200px for 180
+photos, spent on multiplying by one). It keeps a `.bak` and can be re-run safely.
 
 Checkpoints are copied to Drive as they appear, so a dropped session costs you
 nothing already finished.

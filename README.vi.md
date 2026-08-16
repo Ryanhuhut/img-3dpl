@@ -295,10 +295,33 @@ hạt sang nhóm bị tách (`percent_dense` 0.005 thay vì 0.01), sinh hạt t�
 iter 20.000, và kìm tốc độ nở của hạt. `COMPLEX_OBJECT` nới lại ngần ấy cho vật
 thể chủ yếu là gờ cạnh, không có chữ.
 
+Một dòng nữa chọn mốc — đây là cách hai tính năng của bản Inria tháng 10/2024
+được bật lên từng cái một chứ không bật cả cụm:
+
+```python
+MILESTONE = "V2c"   # "V1_5" | "V2a" | "V2b" | "V2c"
+```
+
+| mốc | bộ vẽ | cờ mới |
+|---|---|---|
+| `V1_5` | `dr_aa` | không, và cũng không dùng bảng preset |
+| `V2a` | `3dgs_accel` | không |
+| `V2b` | `3dgs_accel` | `--antialiasing` |
+| `V2c` | `3dgs_accel` | `--antialiasing --optimizer_type sparse_adam` |
+
+`V2a` trông thừa nhưng không thừa. `train.py` truyền
+`separate_sh=SPARSE_ADAM_AVAILABLE`, nên chỉ **cài được** bộ vẽ tăng tốc là
+đường tính SH đã đổi, chưa bật cờ nào cả. Không có `V2a` thì không có nền trung
+tính và cải thiện đến từ đâu cũng không biết. Bù phơi sáng cố tình để ngoài đợt
+này — lý do và cách sửa một dòng để bật nó mà không phá `--eval` nằm ở
+[`docs/EXPOSURE.md`](docs/EXPOSURE.md).
+
 Ô 5 tính trước bộ ảnh ngốn bao nhiêu RAM và **dừng lại** nếu vượt 10,5 GB, kèm
-con số bao nhiêu tấm thì vừa. Ô 7 vá mã nguồn 3DGS cho bốn thứ không có đường
+con số bao nhiêu tấm thì vừa. Ô 7 vá mã nguồn 3DGS cho năm thứ không có đường
 dòng lệnh nào tới được: ảnh dạng `uint8`, trần cứng số hạt, phạt hạt bị kéo dài,
-và log số hạt + VRAM đỉnh mỗi 1000 iter. Nó giữ bản `.bak` và chạy lại được.
+log số hạt + VRAM đỉnh mỗi 1000 iter, và bỏ cái `alpha_mask` toàn số 1 mà bản
+tháng 10/2024 cất cho từng camera (180 ảnh 3200px là 5,5 GB RAM trả cho một phép
+nhân với 1). Nó giữ bản `.bak` và chạy lại được.
 
 Mỗi mốc lưu được chép sang Drive ngay khi xuất hiện, nên Colab có ngắt giữa
 chừng thì phần đã xong vẫn còn nguyên.
